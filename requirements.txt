@@ -1,0 +1,5 @@
+﻿pygame==2.6.1
+pandas==2.3.0
+plotly==6.2.0
+customtkinter==5.2.2
+requests>=2.31.0

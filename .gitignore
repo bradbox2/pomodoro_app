@@ -1,0 +1,48 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+envi/
+envipomo/
+envi-*/
+
+# Data & Database (exclude large data and logs)
+data/*.bak*
+data/*.log
+data/*.rar
+data/*.db
+data/pb_offline_queue.db
+config.json
+config_history.json
+all_time.log
+
+# Generated reports & logs
+pomodoro_dashboard*.html
+interruptions_dump.csv
+debug_output.txt
+test_output.txt
+POCKETBASE_DEBUG_LOG.md
+
+# Media files (Large binaries)
+sound/music/
+*.mp3
+*.wav
+
+# Build and distribution
+build/
+dist/
+*.spec
+
+# Claude Code
+.claude/
+
+# OS/System
+Thumbs.db
+.DS_Store
+%USERP~1/
