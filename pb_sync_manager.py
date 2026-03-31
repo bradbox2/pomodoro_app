@@ -353,8 +353,9 @@ class PBSyncManager:
             logger.info("PB offline: queued session for later sync")
 
     def _sync_session(self, session_payload: dict, stat_payload: dict):
-        ok1 = self.pb.create_record("ff_sessions", session_payload) is not None
+        # upsert stat FIRST so the reward hook reads the updated count when it fires
         ok2 = self.pb.upsert_daily_stat(**stat_payload)
+        ok1 = self.pb.create_record("ff_sessions", session_payload) is not None
         if not (ok1 and ok2):
             self.queue.enqueue("session", session_payload)
             self.queue.enqueue("daily_stat", stat_payload)
