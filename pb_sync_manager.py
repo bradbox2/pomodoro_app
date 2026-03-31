@@ -16,6 +16,7 @@ import subprocess
 import threading
 import time
 import os
+import socket
 import sqlite3
 import json
 import logging
@@ -64,11 +65,25 @@ class SSHTunnelManager:
         self._proc: Optional[subprocess.Popen] = None
         self._lock = threading.Lock()
 
+    @staticmethod
+    def _port_open(port: int) -> bool:
+        """Return True if something is already listening on the local port."""
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=1):
+                return True
+        except OSError:
+            return False
+
     def start(self) -> bool:
         """Start tunnel if not running. Returns True if tunnel is up."""
         with self._lock:
+            # Own process still alive
             if self._proc and self._proc.poll() is None:
-                return True  # already running
+                return True
+            # Port already bound by an external process (e.g. manual tunnel) — reuse it
+            if self._port_open(PB_LOCAL_PORT):
+                logger.info(f"SSH tunnel: port {PB_LOCAL_PORT} already open, reusing")
+                return True
             cmd = [
                 "ssh", SSH_HOST,
                 "-N",
