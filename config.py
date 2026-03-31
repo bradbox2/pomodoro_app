@@ -54,11 +54,18 @@ ENABLE_ANIMATIONS = True               # 是否启用UI动画效果
 HIGH_CONTRAST_MODE = False             # 高对比度模式（可访问性）
 FONT_SIZE_SCALE = 1.0                  # 字体缩放系数（1.0 = 100%）
 
+import os as _os
+try:
+    from dotenv import load_dotenv as _load
+    _load(_os.path.join(_os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 # --- PocketBase Cloud Sync Configuration ---
 PB_SYNC_ENABLED = True
-PB_URL = "http://38.244.21.35:8090/api/"     # PocketBase API URL
-PB_EMAIL = "649113114@qq.com"
-PB_PASSWORD = "njYzZjHb8YJG8mt"
+PB_URL      = _os.environ.get("PB_URL", "")
+PB_EMAIL    = _os.environ.get("PB_EMAIL", "")
+PB_PASSWORD = _os.environ.get("PB_PASSWORD", "")
 PB_COLLECTIONS = {
     "projects": "ff_projects",
     "tasks": "ff_tasks",

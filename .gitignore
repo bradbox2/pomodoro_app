@@ -39,6 +39,9 @@ build/
 dist/
 *.spec
 
+# Environment / Secrets
+.env
+
 # Claude Code
 .claude/
 

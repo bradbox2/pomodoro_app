@@ -24,6 +24,12 @@ from datetime import datetime, date
 from typing import Optional
 
 try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass  # python-dotenv not installed; rely on environment variables
+
+try:
     import requests
     REQUESTS_OK = True
 except ImportError:
@@ -31,20 +37,22 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
-# ── Config ──────────────────────────────────────────────────────────────────
+# ── Config (loaded from .env or environment variables) ───────────────────────
 
-SSH_KEY = os.path.join(os.path.dirname(__file__), "..", "openclaw-bot", "keys", "Openclaw_key8.pem")
-SSH_HOST = "ubuntu@106.53.153.227"
-PB_REMOTE_ADDR = "127.0.0.1:8090"
-PB_LOCAL_PORT = 18090          # local tunnel port (avoid collision with any local 8090)
-PB_URL = f"http://127.0.0.1:{PB_LOCAL_PORT}"
-PB_EMAIL = "bot@focusflow.local"
-PB_PASSWORD = "FocusFlow2026!pb"   # matches what was set during init
+# SSH connection uses the "openclaw" alias defined in ~/.ssh/config.
+# No key path needed here — identity and host are managed centrally in SSH config.
+SSH_HOST = os.environ.get("PB_SSH_HOST", "openclaw")
+PB_REMOTE_ADDR  = "127.0.0.1:8090"
+PB_LOCAL_PORT   = 18090          # local tunnel port (avoid collision with any local 8090)
+PB_URL          = f"http://127.0.0.1:{PB_LOCAL_PORT}"
+PB_API_TOKEN  = os.environ.get("PB_API_TOKEN", "")   # preferred: API token (no password needed)
+PB_EMAIL      = os.environ.get("PB_EMAIL", "")        # fallback: password auth
+PB_PASSWORD   = os.environ.get("PB_PASSWORD", "")
 TASKS_REMOTE_ADDR = "127.0.0.1:18091"
-TASKS_LOCAL_PORT = 18091       # local tunnel port for the tasks HTTP server
-TASKS_URL = f"http://127.0.0.1:{TASKS_LOCAL_PORT}"
+TASKS_LOCAL_PORT  = 18091       # local tunnel port for the tasks HTTP server
+TASKS_URL         = f"http://127.0.0.1:{TASKS_LOCAL_PORT}"
 TUNNEL_RETRY_DELAY = 5
-REQUEST_TIMEOUT = 8
+REQUEST_TIMEOUT    = 8
 
 
 # ── SSH Tunnel Manager ───────────────────────────────────────────────────────
@@ -61,18 +69,12 @@ class SSHTunnelManager:
         with self._lock:
             if self._proc and self._proc.poll() is None:
                 return True  # already running
-            key = os.path.abspath(SSH_KEY)
-            if not os.path.exists(key):
-                logger.warning(f"SSH key not found: {key}")
-                return False
             cmd = [
-                "ssh", "-i", key,
-                "-N", "-o", "StrictHostKeyChecking=no",
+                "ssh", SSH_HOST,
+                "-N",
                 "-o", "ExitOnForwardFailure=yes",
-                "-o", "ServerAliveInterval=30",
                 "-L", f"{PB_LOCAL_PORT}:{PB_REMOTE_ADDR}",
                 "-L", f"{TASKS_LOCAL_PORT}:{TASKS_REMOTE_ADDR}",
-                SSH_HOST,
             ]
             try:
                 self._proc = subprocess.Popen(
@@ -103,9 +105,16 @@ class PBClient:
     def _auth(self) -> Optional[str]:
         if not REQUESTS_OK:
             return None
+        # API token preferred — works even when password auth is disabled
+        if PB_API_TOKEN:
+            return PB_API_TOKEN
+        # Fallback: password-based auth (requires email/password auth enabled server-side)
         now = time.time()
         if self._token and now < self._token_expiry:
             return self._token
+        if not PB_EMAIL or not PB_PASSWORD:
+            logger.warning("PB auth: no PB_API_TOKEN and PB_EMAIL/PB_PASSWORD not set")
+            return None
         try:
             r = requests.post(
                 f"{PB_URL}/api/collections/_superusers/auth-with-password",
