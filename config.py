@@ -19,8 +19,8 @@ YELLOW = BG_COLOR      # Deprecated, mapped to BG for backward compat
 FONT_NAME = "Segoe UI"
 
 # --- Timer Constants (in minutes) ---
-WORK_MIN = 25
-SHORT_BREAK_MIN = 5
+WORK_MIN = 2
+SHORT_BREAK_MIN = 1
 LONG_BREAK_MIN = 15
 
 # --- Long Break Configuration ---
@@ -62,7 +62,8 @@ except ImportError:
     pass
 
 # --- PocketBase Cloud Sync Configuration ---
-PB_SYNC_ENABLED = True
+# Legacy SyncManager (38.244.21.35) is retired; new PBSyncManager handles all sync.
+PB_SYNC_ENABLED = False
 PB_URL      = _os.environ.get("PB_URL", "")
 PB_EMAIL    = _os.environ.get("PB_EMAIL", "")
 PB_PASSWORD = _os.environ.get("PB_PASSWORD", "")
