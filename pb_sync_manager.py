@@ -292,12 +292,13 @@ class PBSyncManager:
     Call record_session() after each completed pomodoro.
     """
 
-    def __init__(self, data_dir: str):
+    def __init__(self, data_dir: str, on_connected=None):
         self.tunnel = SSHTunnelManager()
         self.pb = PBClient()
         queue_path = os.path.join(data_dir, "pb_offline_queue.db")
         self.queue = OfflineQueue(queue_path)
         self._connected = False
+        self._on_connected_cb = on_connected
         self._connect_bg()
 
     def _connect_bg(self):
@@ -319,6 +320,8 @@ class PBSyncManager:
                 flushed = self.queue.flush(self.pb)
                 if flushed:
                     logger.info(f"PB: flushed {flushed} offline ops")
+                if self._on_connected_cb:
+                    self._on_connected_cb()
         else:
             self._connected = False
         logger.info(f"PB connection: {'OK' if self._connected else 'OFFLINE'}")

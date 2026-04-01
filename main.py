@@ -120,7 +120,7 @@ class PomodoroApp:
         self.check_pygame_events()
 
         # --- PocketBase Sync (OpenClaw server, async, non-blocking) ---
-        self.pb_sync = PBSyncManager(self.data_dir)
+        self.pb_sync = PBSyncManager(self.data_dir, on_connected=self._on_pb_connected)
 
         # --- Startup Cloud Pull (async, non-blocking) ---
         self._startup_cloud_pull()
@@ -248,6 +248,12 @@ class PomodoroApp:
         """On startup, PBSyncManager handles its own async connection + offline queue flush.
         Schedule a cloud task fetch after the tunnel has time to connect (~4s)."""
         self.root.after(4000, self._refresh_cloud_tasks)
+
+    def _on_pb_connected(self) -> None:
+        """Called by PBSyncManager background thread when tunnel + auth succeed.
+        Runs _refresh_cloud_tasks on the main thread so the task list updates
+        even if the initial 4s startup fetch fired before the connection was ready."""
+        self.root.after(0, self._refresh_cloud_tasks)
 
     def _refresh_cloud_tasks(self) -> None:
         """Fetch today's active tasks from cloud, group by project, populate dropdowns."""
@@ -521,7 +527,13 @@ class PomodoroApp:
             self.ui.set_task_list(self._cloud_projects[first])
         else:
             self.ui.set_project_list(local_projects)
-            self.ui.set_task_list([])
+            if local_projects:
+                first_local = local_projects[0]
+                self.ui.project_var.set(first_local)
+                local_tasks = self.data_manager.get_tasks_for_project(first_local)
+                self.ui.set_task_list(local_tasks)
+            else:
+                self.ui.set_task_list([])
 
         self.ui.task_var.set('')
         self.ui.estimate_var.set('1')
