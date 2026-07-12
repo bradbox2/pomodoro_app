@@ -1,18 +1,6 @@
 
-import sys
 import unittest
 from unittest.mock import MagicMock
-
-# Mock config
-sys.modules['config'] = MagicMock()
-import config
-
-# Define constants
-config.WORK_MIN = 25
-config.SHORT_BREAK_MIN = 5
-config.LONG_BREAK_MIN = 15
-config.LONG_BREAK_INTERVAL = 4
-config.RESET_LONG_BREAK_ON_RESTART = True
 
 # We need to be able to import PomodoroApp, but it imports other things that might need mocking
 # Let's just test the logic concept by recreating the method since we can't easily instantiate the full App

@@ -1,5 +1,8 @@
 import json
 import os
+from pathlib import Path
+
+from app_paths import AppPaths
 
 class AppConfigManager:
     CONFIG_FILE = "config.json"
@@ -28,16 +31,22 @@ class AppConfigManager:
         }
     }
 
-    def __init__(self, base_dir=None):
+    def __init__(self, config_path=None):
         import uuid
         from config_history_manager import ConfigHistoryManager
         
-        if base_dir:
-             self.config_path = os.path.join(base_dir, self.CONFIG_FILE)
-             self.base_dir = base_dir
-        else:
-             self.config_path = self.CONFIG_FILE
-             self.base_dir = "."
+        if config_path is None:
+            install_dir = Path(__file__).resolve().parent
+            paths = AppPaths.from_environment(install_dir)
+            paths.ensure_ready()
+            config_path = paths.config_path
+
+        path = Path(config_path)
+        if path.name != self.CONFIG_FILE:
+            path = path / self.CONFIG_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path = str(path)
+        self.base_dir = str(path.parent)
              
         self.config = self.load_config()
         

@@ -14,6 +14,25 @@ import math
 from visual_effects import BlackHoleEffect, ZenFocusEffect
 from game_progress_bar import GameFocusBar
 
+
+def calculate_home_size(requested_width, requested_height, screen_width, screen_height):
+    """Fit the home window to its content while leaving OS chrome/taskbar room."""
+    return (
+        min(int(requested_width), int(screen_width * 0.9)),
+        min(int(requested_height), int(screen_height * 0.9)),
+    )
+
+
+def parse_focus_estimate(raw: str) -> int:
+    """Parse the local-first estimate contract shared with GoalSifter."""
+    try:
+        estimate = int(raw.strip())
+    except (AttributeError, ValueError):
+        raise ValueError("Focus item estimate must be between 1 and 99") from None
+    if not 1 <= estimate <= 99:
+        raise ValueError("Focus item estimate must be between 1 and 99")
+    return estimate
+
 # --- Pygame Widget (Refactored) ---
 class PygameTimerWidget(tk.Frame):
     """只负责视觉效果 (Delegates rendering to Effect Classes)"""
@@ -231,12 +250,17 @@ class DateRangeDialog(ctk.CTkToplevel):
 class UIManager:
     def __init__(self, root: ctk.CTk, action_command, secondary_action_command, analysis_command,
                  quick_start_command, load_backup_command, merge_db_command,
-                 sync_cloud_command,
                  sound_switch_callback,
                  delete_project_callback,
                  delete_task_callback,
                  home_callback,
                  theme_toggle_callback,
+                 focus_item_select_callback,
+                 goalsifter_refresh_callback,
+                 goalsifter_sync_callback,
+                 goalsifter_bind_callback,
+                 goalsifter_create_callback,
+                 local_manage_callback,
                  image_dir, all_projects: list, sound_manager=None):
         self.root = root
         self.action_command = action_command
@@ -245,12 +269,17 @@ class UIManager:
         self.quick_start_command = quick_start_command
         self.load_backup_command = load_backup_command
         self.merge_db_command = merge_db_command
-        self.sync_cloud_command = sync_cloud_command
         self.sound_switch_callback = sound_switch_callback
         self.delete_project_callback = delete_project_callback
         self.delete_task_callback = delete_task_callback
         self.home_callback = home_callback
         self.theme_toggle_callback = theme_toggle_callback
+        self.focus_item_select_callback = focus_item_select_callback
+        self.goalsifter_refresh_callback = goalsifter_refresh_callback
+        self.goalsifter_sync_callback = goalsifter_sync_callback
+        self.goalsifter_bind_callback = goalsifter_bind_callback
+        self.goalsifter_create_callback = goalsifter_create_callback
+        self.local_manage_callback = local_manage_callback
         self.image_dir = image_dir
         self.all_projects = all_projects
         self.sound_manager = sound_manager  # Store reference
@@ -272,8 +301,8 @@ class UIManager:
 
     def _setup_window(self):
         self.root.title(f"{APP_NAME} {APP_VERSION}")
-        self.root.geometry(WINDOW_GEOMETRY)
-        self.root.resizable(False, False)
+        self.root.geometry(HOME_WINDOW_GEOMETRY)
+        self.root.resizable(True, True)
         # CustomTkinter handles styling automatically via theme
 
     def _on_theme_change(self):
@@ -336,8 +365,12 @@ class UIManager:
 
 
     def _setup_frames(self):
+        self.root.grid_columnconfigure(0, weight=1)
+        self.root.grid_rowconfigure(0, weight=1)
         self.main_container = ctk.CTkFrame(self.root, fg_color="transparent")
-        self.main_container.grid(row=0, column=0, padx=10, pady=5)
+        self.main_container.grid(row=0, column=0, padx=10, pady=5, sticky="nsew")
+        self.main_container.grid_columnconfigure(0, weight=1)
+        self.main_container.grid_rowconfigure(0, weight=1)
         self.timer_view_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.setup_view_frame = ctk.CTkFrame(self.main_container, fg_color="transparent")
         self.controls_frame = ctk.CTkFrame(self.root, fg_color="transparent")
@@ -374,7 +407,7 @@ class UIManager:
                                        border_width=0)
         pygame_container.grid(row=1, column=0, pady=PADDING_MEDIUM)
         
-        self.pygame_widget = PygameTimerWidget(pygame_container, width=260, height=260,
+        self.pygame_widget = PygameTimerWidget(pygame_container, width=170, height=170,
                                               bg_color=ThemeManager.get_color("bg"))
         self.pygame_widget.pack(padx=0, pady=0)
         
@@ -467,12 +500,41 @@ class UIManager:
         # Project/Task Input Card
         self.input_card, input_inner = self._create_card_frame(self.setup_view_frame)
         self.input_card.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, PADDING_MEDIUM))
+        self.task_source_tabs = ctk.CTkTabview(input_inner, height=330)
+        self.task_source_tabs.pack(fill="both", expand=True)
+        editor_tab = self.task_source_tabs.add("本地任务")
+        goalsifter_tab = self.task_source_tabs.add("GoalSifter 任务")
+        self.local_focus_list = ctk.CTkScrollableFrame(editor_tab, fg_color="transparent", height=165)
+        self.local_focus_list.grid(row=4, column=0, columnspan=3, sticky="nsew", pady=(PADDING_MEDIUM, 0))
+        local_actions = ctk.CTkFrame(editor_tab, fg_color="transparent")
+        local_actions.grid(row=5, column=0, columnspan=3, sticky="w", pady=(PADDING_SMALL, 0))
+        ctk.CTkButton(local_actions, text="绑定已有 DW", width=100, height=26,
+                      command=self.goalsifter_bind_callback).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(local_actions, text="创建并绑定 DW", width=110, height=26,
+                      command=self.goalsifter_create_callback).pack(side="left")
+        ctk.CTkButton(local_actions, text="管理本地任务", width=100, height=26,
+                      command=self.local_manage_callback).pack(side="left", padx=(5, 0))
+        self.goalsifter_focus_list = ctk.CTkScrollableFrame(goalsifter_tab, fg_color="transparent")
+        self.goalsifter_focus_list.pack(fill="both", expand=True, padx=2, pady=2)
+        self.goalsifter_status_label = ctk.CTkLabel(
+            self.goalsifter_focus_list, text="仅显示活跃 DW。连接失败不会影响本地任务。",
+            font=(FONT_NAME, 11), justify="left",
+        )
+        self.goalsifter_status_label.pack(anchor="w", pady=(2, 8))
+        ctk.CTkButton(
+            self.goalsifter_focus_list, text="刷新 GoalSifter 任务", height=28,
+            command=self.goalsifter_refresh_callback,
+        ).pack(anchor="w", pady=(0, 8))
+        ctk.CTkButton(
+            self.goalsifter_focus_list, text="手动同步 Outbox", height=28,
+            command=self.goalsifter_sync_callback,
+        ).pack(anchor="w", pady=(0, 8))
         
         # Project section
-        ctk.CTkLabel(input_inner, text="Project:", 
+        ctk.CTkLabel(editor_tab, text="本地分类（可选）:",
                     font=(FONT_NAME, 11, "bold")).grid(row=0, column=0, columnspan=3, sticky="w", pady=(0, PADDING_SMALL))
         self.project_var = StringVar()
-        self.project_combobox = ctk.CTkComboBox(input_inner, variable=self.project_var, 
+        self.project_combobox = ctk.CTkComboBox(editor_tab, variable=self.project_var,
                                                values=self.all_projects, width=260,
                                                dropdown_fg_color=ThemeManager.get_color("card_bg"),
                                                button_color=ACCENT_COLOR,
@@ -480,20 +542,20 @@ class UIManager:
         self.project_combobox.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, PADDING_MEDIUM))
         
         # Task section
-        ctk.CTkLabel(input_inner, text="Task:", 
+        ctk.CTkLabel(editor_tab, text="任务:",
                     font=(FONT_NAME, 11, "bold")).grid(row=2, column=0, sticky="w", pady=(0, PADDING_SMALL))
         self.task_var = StringVar()
-        self.task_combobox = ctk.CTkComboBox(input_inner, variable=self.task_var, width=180,
+        self.task_combobox = ctk.CTkComboBox(editor_tab, variable=self.task_var, width=180,
                                             dropdown_fg_color=ThemeManager.get_color("card_bg"),
                                             button_color=ACCENT_COLOR,
                                             button_hover_color=BUTTON_HOVER)
         self.task_combobox.grid(row=3, column=0, sticky="w", padx=(0, PADDING_SMALL))
         
         # Estimate input
-        ctk.CTkLabel(input_inner, text="Est:", 
+        ctk.CTkLabel(editor_tab, text="Est:",
                     font=(FONT_NAME, 11, "bold")).grid(row=2, column=1, sticky="w", pady=(0, PADDING_SMALL))
         self.estimate_var = StringVar(value="1")
-        self.estimate_entry = ctk.CTkEntry(input_inner, textvariable=self.estimate_var, 
+        self.estimate_entry = ctk.CTkEntry(editor_tab, textvariable=self.estimate_var,
                                           width=50, justify="center")
         self.estimate_entry.grid(row=3, column=1, sticky="w")
         
@@ -539,11 +601,6 @@ class UIManager:
                      font=(FONT_NAME, 9), width=60, height=24,
                      fg_color="transparent", text_color="#888888",
                      hover_color=BUTTON_HOVER).pack(side="left", padx=2)
-        self.sync_btn = ctk.CTkButton(btn_frame, text="Sync", command=self.sync_cloud_command,
-                                      font=(FONT_NAME, 9), width=60, height=24,
-                                      fg_color="transparent", text_color="#888888",
-                                      hover_color=BUTTON_HOVER)
-        self.sync_btn.pack(side="left", padx=2)
         self.db_status_label = ctk.CTkLabel(self.status_bar_frame, text="", 
                                            font=(FONT_NAME, 9), 
                                            text_color="#888888")
@@ -581,13 +638,27 @@ class UIManager:
     
     def show_setup_view(self):
         self.timer_view_frame.grid_remove()
-        self.setup_view_frame.grid(row=0, column=0)
+        self.setup_view_frame.grid(row=0, column=0, sticky="n")
         self.status_bar_frame.grid(row=3, column=0, sticky="ew")
+        self.root.resizable(True, True)
+        self.root.attributes('-topmost', False)
+        self.root.after_idle(self._fit_home_window)
+
+    def _fit_home_window(self):
+        self.root.update_idletasks()
+        width, height = calculate_home_size(
+            self.root.winfo_reqwidth(), self.root.winfo_reqheight(),
+            self.root.winfo_screenwidth(), self.root.winfo_screenheight(),
+        )
+        self.root.geometry(f"{width}x{height}")
 
     def show_timer_view(self):
         self.setup_view_frame.grid_remove()
-        self.timer_view_frame.grid(row=0, column=0)
+        self.timer_view_frame.grid(row=0, column=0, sticky="n")
         self.status_bar_frame.grid_remove()
+        self.root.geometry(TIMER_WINDOW_GEOMETRY)
+        self.root.resizable(False, False)
+        self.root.attributes('-topmost', True)
 
     def _bind_events(self):
         # CustomTkinter ComboBox uses 'command' parameter, but we can also bind to selection
@@ -630,19 +701,59 @@ class UIManager:
     def update_db_status(self, ts):
         self.db_status_label.configure(text=f"Updated: {ts}")
 
-    def set_sync_button_state(self, text: str, color: str = "#888888"):
-        """Update the Sync button label and color to reflect sync status."""
-        if hasattr(self, 'sync_btn'):
-            self.sync_btn.configure(text=text, text_color=color)
-
     def get_project_name(self): return self.project_var.get().strip()
     def get_task_name(self): return self.task_var.get().strip()
-    def get_estimate(self): return int(self.estimate_var.get()) if self.estimate_var.get().isdigit() else 1
+    def get_estimate(self): return parse_focus_estimate(self.estimate_var.get())
     def get_sound_choice(self): return self.sound_choice.get()
     def set_project_list(self, projects): self.project_combobox.configure(values=projects)
     def set_task_list(self, tasks): self.task_combobox.configure(values=tasks)
     def set_estimate(self, value): self.estimate_var.set(str(value))
     def set_sound_choice(self, choice): self.sound_choice.set(choice)
+    def select_editor_tab(self): self.task_source_tabs.set("本地任务")
+
+    def refresh_local_focus_items(self, items):
+        for widget in self.local_focus_list.winfo_children():
+            widget.destroy()
+        if not items:
+            ctk.CTkLabel(self.local_focus_list, text="还没有本地任务。填写上方任务后按开始，即可离线计时。").pack(pady=10)
+            return
+        for item in items:
+            binding = "已绑定 DW" if item["state"] == "bound" else "草稿"
+            text = (
+                f'{item["task_name"]}\n{item["project_name"]}  ·  '
+                f'{item["completed_count"]}/{item["estimate"]}  ·  {binding}'
+            )
+            ctk.CTkButton(
+                self.local_focus_list, text=text, anchor="w", height=48,
+                command=lambda value=item: self.focus_item_select_callback(value),
+            ).pack(fill="x", pady=3)
+
+    def refresh_goalsifter_focus_items(self, items, status_text=""):
+        for widget in self.goalsifter_focus_list.winfo_children():
+            widget.destroy()
+        ctk.CTkLabel(
+            self.goalsifter_focus_list,
+            text=status_text or "仅显示活跃 DW；任务编辑与完成请回 GoalSifter。",
+            font=(FONT_NAME, 11), justify="left",
+        ).pack(anchor="w", pady=(2, 8))
+        ctk.CTkButton(
+            self.goalsifter_focus_list, text="刷新 GoalSifter 任务", height=28,
+            command=self.goalsifter_refresh_callback,
+        ).pack(anchor="w", pady=(0, 8))
+        ctk.CTkButton(
+            self.goalsifter_focus_list, text="手动同步 Outbox", height=28,
+            command=self.goalsifter_sync_callback,
+        ).pack(anchor="w", pady=(0, 8))
+        if not items:
+            ctk.CTkLabel(self.goalsifter_focus_list, text="没有可选的活跃 DW。", font=(FONT_NAME, 11)).pack(pady=12)
+            return
+        for item in items:
+            context = item.get("context_label") or "未关联 KR"
+            text = f'{item["task_name"]}\nKR：{context}  ·  {item["completed_count"]}/{item["estimate"]}  ·  已绑定 DW'
+            ctk.CTkButton(
+                self.goalsifter_focus_list, text=text, anchor="w", height=52,
+                command=lambda value=item: self.focus_item_select_callback(value),
+            ).pack(fill="x", pady=3)
     
     def update_timer_display(self, time_str):
         if hasattr(self, 'pygame_widget'):

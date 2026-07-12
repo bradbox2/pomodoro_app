@@ -15,15 +15,15 @@ if not exist "main.py" (
     exit /b
 )
 
-REM Check and activate virtual environment
-if not exist "envipomo\Scripts\activate.bat" (
-    echo [ERROR] Virtual environment "envipomo" not found.
+REM Check virtual environment
+if not exist ".venv\Scripts\pythonw.exe" (
+    echo [ERROR] Virtual environment ".venv" not found.
+    echo Run: py -3.11 -m venv .venv ^&^& .venv\Scripts\python.exe -m pip install -r requirements.txt
     pause
     exit /b
 )
 
 echo Starting FocusFlow...
-call "envipomo\Scripts\activate.bat"
-start "Pomodoro" pythonw.exe main.py
+start "Pomodoro" ".venv\Scripts\pythonw.exe" "main.py"
 
 exit

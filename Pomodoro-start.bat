@@ -17,9 +17,9 @@ if not exist "main.py" (
 )
 
 REM Check if the virtual environment exists
-if not exist "envipomo\Scripts\pythonw.exe" (
-    echo [ERROR] Virtual environment "envipomo" not found.
-    echo Please ensure you have created the environment as per README.md.
+if not exist ".venv\Scripts\pythonw.exe" (
+    echo [ERROR] Virtual environment ".venv" not found.
+    echo Run: py -3.11 -m venv .venv ^&^& .venv\Scripts\python.exe -m pip install -r requirements.txt
     pause
     exit /b
 )
@@ -30,7 +30,7 @@ REM ==========================================
 echo Starting FocusFlow, please wait...
 
 REM Use pythonw.exe to launch without a console window
-start "FocusFlow" "envipomo\Scripts\pythonw.exe" "main.py"
+start "FocusFlow" ".venv\Scripts\pythonw.exe" "main.py"
 
 REM Exit the script
 exit

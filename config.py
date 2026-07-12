@@ -31,7 +31,9 @@ RESET_LONG_BREAK_ON_RESTART = True # If True, count starts from 0 on app restart
 DB_NAME = "pomodoro_data.db"
 
 # --- Window Behavior ---
-WINDOW_GEOMETRY = "300x510"  # Optimized from 360x580 for better content display
+HOME_WINDOW_GEOMETRY = "800x600"
+TIMER_WINDOW_GEOMETRY = "300x400"
+WINDOW_GEOMETRY = HOME_WINDOW_GEOMETRY  # Backwards-compatible home default
 ALWAYS_ON_TOP = True
 FOCUSED_TRANSPARENCY = 0.8
 
@@ -53,22 +55,3 @@ ENABLE_THEME_SWITCHING = True          # 是否启用主题切换功能
 ENABLE_ANIMATIONS = True               # 是否启用UI动画效果
 HIGH_CONTRAST_MODE = False             # 高对比度模式（可访问性）
 FONT_SIZE_SCALE = 1.0                  # 字体缩放系数（1.0 = 100%）
-
-import os as _os
-try:
-    from dotenv import load_dotenv as _load
-    _load(_os.path.join(_os.path.dirname(__file__), ".env"))
-except ImportError:
-    pass
-
-# --- PocketBase Cloud Sync Configuration ---
-# Legacy SyncManager (38.244.21.35) is retired; new PBSyncManager handles all sync.
-PB_SYNC_ENABLED = False
-PB_URL      = _os.environ.get("PB_URL", "")
-PB_EMAIL    = _os.environ.get("PB_EMAIL", "")
-PB_PASSWORD = _os.environ.get("PB_PASSWORD", "")
-PB_COLLECTIONS = {
-    "projects": "ff_projects",
-    "tasks": "ff_tasks",
-    "sessions": "ff_sessions"
-}

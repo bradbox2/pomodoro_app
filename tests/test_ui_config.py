@@ -1,29 +1,25 @@
 """
 Test script to verify UI configuration changes
 """
-import sys
-sys.path.insert(0, 'd:/Python311_Project/pomodoro_app')
-
 from config import *
+from ui_manager import calculate_home_size
 
 def test_window_size():
-    """Verify window size is correctly updated"""
-    expected = "360x580"
-    actual = WINDOW_GEOMETRY
-    assert actual == expected, f"Expected {expected}, got {actual}"
-    print(f"✓ Window size test passed: {actual}")
+    """Home and topmost timer use deliberately different window sizes."""
+    assert HOME_WINDOW_GEOMETRY == "800x600"
+    assert TIMER_WINDOW_GEOMETRY == "300x400"
+
+
+def test_home_size_follows_content_without_exceeding_screen():
+    assert calculate_home_size(430, 690, 1920, 1080) == (430, 690)
+    assert calculate_home_size(2000, 1200, 1920, 1080) == (1728, 972)
 
 def test_color_constants():
     """Verify new color constants are defined"""
-    assert CARD_BG_COLOR == "#2C5F6F", f"CARD_BG_COLOR incorrect: {CARD_BG_COLOR}"
+    assert CARD_BG_COLOR == "#1F1F1F", f"CARD_BG_COLOR incorrect: {CARD_BG_COLOR}"
     assert ACCENT_COLOR == "#F4A261", f"ACCENT_COLOR incorrect: {ACCENT_COLOR}"
     assert SUCCESS_COLOR == "#52B788", f"SUCCESS_COLOR incorrect: {SUCCESS_COLOR}"
     assert BUTTON_HOVER == "#21867A", f"BUTTON_HOVER incorrect: {BUTTON_HOVER}"
-    print("✓ Color scheme test passed")
-    print(f"  - CARD_BG_COLOR: {CARD_BG_COLOR}")
-    print(f"  - ACCENT_COLOR: {ACCENT_COLOR}")
-    print(f"  - SUCCESS_COLOR: {SUCCESS_COLOR}")
-    print(f"  - BUTTON_HOVER: {BUTTON_HOVER}")
 
 def test_spacing_constants():
     """Verify spacing constants are defined"""
@@ -31,11 +27,6 @@ def test_spacing_constants():
     assert PADDING_MEDIUM == 10, f"PADDING_MEDIUM incorrect: {PADDING_MEDIUM}"
     assert PADDING_LARGE == 15, f"PADDING_LARGE incorrect: {PADDING_LARGE}"
     assert PADDING_XLARGE == 20, f"PADDING_XLARGE incorrect: {PADDING_XLARGE}"
-    print("✓ Spacing constants test passed")
-    print(f"  - PADDING_SMALL: {PADDING_SMALL}")
-    print(f"  - PADDING_MEDIUM: {PADDING_MEDIUM}")
-    print(f"  - PADDING_LARGE: {PADDING_LARGE}")
-    print(f"  - PADDING_XLARGE: {PADDING_XLARGE}")
 
 if __name__ == "__main__":
     print("=" * 50)

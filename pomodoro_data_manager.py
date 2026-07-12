@@ -5,10 +5,9 @@ import uuid
 from datetime import datetime
 from typing import List, Optional, Dict, Any
 import pandas as pd
-from sync_manager import SyncManager
 
 # Define the latest version of the database schema
-LATEST_DB_VERSION = 4
+LATEST_DB_VERSION = 7
 
 class PomodoroDataManager:
     """
@@ -79,7 +78,30 @@ class PomodoroDataManager:
                     self.cursor.execute("ALTER TABLE tasks ADD COLUMN sound_preference TEXT DEFAULT 'dida'")
                 self.conn.execute('PRAGMA user_version = 4')
                 self.conn.commit()
+                db_version = 4
                 print("Migration to version 4 successful.")
+
+            if db_version < 5:
+                self.conn.execute('PRAGMA user_version = 5')
+                self.conn.commit()
+                print("Migration to version 5 successful.")
+
+            if db_version < 6:
+                cursor.execute("PRAGMA table_info('focus_items')")
+                columns = [info[1] for info in cursor.fetchall()]
+                if 'source' not in columns:
+                    self.cursor.execute("ALTER TABLE focus_items ADD COLUMN source TEXT NOT NULL DEFAULT 'local'")
+                if 'context_label' not in columns:
+                    self.cursor.execute("ALTER TABLE focus_items ADD COLUMN context_label TEXT")
+                self.conn.execute('PRAGMA user_version = 6')
+                self.conn.commit()
+                print("Migration to version 6 successful.")
+
+            if db_version < 7:
+                self.cursor.execute("DROP INDEX IF EXISTS idx_focus_items_goalsifter_task_id")
+                self.conn.execute('PRAGMA user_version = 7')
+                self.conn.commit()
+                print("Migration to version 7 successful.")
 
         except sqlite3.Error as e:
             print(f"Database migration failed: {e}")
@@ -106,11 +128,36 @@ class PomodoroDataManager:
                     end_mood TEXT, interruption_reason TEXT
                 )
             ''')
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS focus_items (
+                    local_id TEXT PRIMARY KEY,
+                    project_name TEXT NOT NULL,
+                    task_name TEXT NOT NULL,
+                    goalsifter_task_id TEXT,
+                    state TEXT NOT NULL DEFAULT 'draft',
+                    source TEXT NOT NULL DEFAULT 'local',
+                    context_label TEXT,
+                    UNIQUE(project_name, task_name)
+                )
+            ''')
+            self.cursor.execute('''
+                CREATE TABLE IF NOT EXISTS focus_outbox (
+                    event_id TEXT PRIMARY KEY,
+                    device_id TEXT NOT NULL,
+                    task_id TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    ended_at TEXT NOT NULL,
+                    duration_minutes INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT
+                )
+            ''')
             self.conn.commit()
         except sqlite3.Error as e:
             print(f"Table creation error: {e}")
             
-    def record_session(self, session_data: Dict[str, Any]) -> None:
+    def record_session(self, session_data: Dict[str, Any]) -> str:
         """
         Records a completed or interrupted session to the database.
         
@@ -126,37 +173,252 @@ class PomodoroDataManager:
                         end_time, duration_minutes, status, focus_score, 
                         end_mood, interruption_reason
                      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'''
+            session_id = session_data.get('session_id') or str(uuid.uuid4())
             params = (
-                str(uuid.uuid4()), session_data['project_name'], session_data['task_name'],
+                session_id, session_data['project_name'], session_data['task_name'],
                 session_data['session_type'], session_data['start_time'].strftime("%Y-%m-%d %H:%M:%S"),
                 session_data['end_time'].strftime("%Y-%m-%d %H:%M:%S"), session_data['duration_minutes'],
                 session_data['status'], session_data['focus_score'],
                 session_data['end_mood'], session_data['interruption_reason']
             )
             self.cursor.execute(sql, params)
+            self._queue_bound_completed_session(session_id, session_data)
             self.conn.commit()
-            
-            # Cloud Sync (Async)
-            sync_payload = {
-                "project_name": session_data['project_name'],
-                "task_name": session_data['task_name'],
-                "session_type": session_data['session_type'],
-                "start_time": session_data['start_time'].strftime("%Y-%m-%d %H:%M:%S"),
-                "end_time": session_data['end_time'].strftime("%Y-%m-%d %H:%M:%S"),
-                "duration_minutes": session_data['duration_minutes'],
-                "status": session_data['status'],
-                "focus_score": session_data.get('focus_score'),
-                "end_mood": session_data.get('end_mood'),
-                "interruption_reason": session_data.get('interruption_reason')
-            }
-            SyncManager.sync_data("sessions", sync_payload, record_id=params[0])
+            return session_id
             
         except sqlite3.OperationalError as e:
             if "has no column named" in str(e):
                 self._run_migrations()
                 self.cursor.execute(sql, params)
                 self.conn.commit()
+                return session_id
             else: raise e
+
+    def _queue_bound_completed_session(self, session_id: str, session_data: Dict[str, Any]) -> None:
+        if (
+            session_data.get('session_type') != 'Work'
+            or session_data.get('status') != 'Completed'
+            or not session_data.get('device_id')
+        ):
+            return
+        focus_item = self.ensure_focus_item(session_data['project_name'], session_data['task_name'])
+        task_id = focus_item['goalsifter_task_id']
+        if not task_id:
+            return
+        self.cursor.execute('''
+            INSERT OR IGNORE INTO focus_outbox (
+                event_id, device_id, task_id, started_at, ended_at,
+                duration_minutes, status
+            ) VALUES (?, ?, ?, ?, ?, ?, 'completed')
+        ''', (
+            session_id,
+            session_data['device_id'],
+            task_id,
+            session_data['start_time'].isoformat(timespec='seconds'),
+            session_data['end_time'].isoformat(timespec='seconds'),
+            session_data['duration_minutes'],
+        ))
+
+    def ensure_focus_item(self, project_name: str, task_name: str) -> Dict[str, Any]:
+        self.cursor.execute('''
+            INSERT OR IGNORE INTO focus_items (local_id, project_name, task_name)
+            VALUES (?, ?, ?)
+        ''', (str(uuid.uuid4()), project_name, task_name))
+        self.cursor.execute('''
+            SELECT local_id, project_name, task_name, goalsifter_task_id, state
+            FROM focus_items WHERE project_name = ? AND task_name = ?
+        ''', (project_name, task_name))
+        row = self.cursor.fetchone()
+        return {
+            'local_id': row[0], 'project_name': row[1], 'task_name': row[2],
+            'goalsifter_task_id': row[3], 'state': row[4],
+        }
+
+    def upsert_goalsifter_focus_item(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Mirror a remote DW locally without treating its KR as a local project."""
+        task_id = str(task['task_id'])
+        title = str(task['task_name']).strip()
+        estimate = int(task['pomo_estimate'])
+        if not title or not 1 <= estimate <= 4:
+            raise ValueError("GoalSifter task must have a title and estimate between 1 and 4")
+        internal_project = f"__goalsifter__:{task_id}"
+        context_label = task.get('kr_ref') or None
+        self.add_project(internal_project)
+        self.cursor.execute('''
+            INSERT INTO tasks (project_name, task_name, estimated_pomodoros, status, sound_preference)
+            VALUES (?, ?, ?, 'In Progress', 'dida')
+            ON CONFLICT(project_name, task_name) DO UPDATE SET
+                estimated_pomodoros = excluded.estimated_pomodoros,
+                status = 'In Progress'
+        ''', (internal_project, title, estimate))
+        self.cursor.execute('''
+            SELECT local_id FROM focus_items
+            WHERE project_name = ? AND source = 'goalsifter'
+        ''', (internal_project,))
+        existing = self.cursor.fetchone()
+        if existing:
+            self.cursor.execute('''
+                UPDATE focus_items SET task_name = ?, goalsifter_task_id = ?, state = 'bound',
+                    context_label = ? WHERE local_id = ?
+            ''', (title, task_id, context_label, existing[0]))
+        else:
+            self.cursor.execute('''
+                INSERT INTO focus_items (
+                    local_id, project_name, task_name, goalsifter_task_id, state, source, context_label
+                ) VALUES (?, ?, ?, ?, 'bound', 'goalsifter', ?)
+            ''', (str(uuid.uuid4()), internal_project, title, task_id, context_label))
+        self.conn.commit()
+        self.cursor.execute('''
+            SELECT local_id, project_name, task_name, goalsifter_task_id, state, source, context_label
+            FROM focus_items WHERE project_name = ? AND source = 'goalsifter'
+        ''', (internal_project,))
+        row = self.cursor.fetchone()
+        return {
+            'local_id': row[0], 'project_name': row[1], 'task_name': row[2],
+            'goalsifter_task_id': row[3], 'state': row[4], 'source': row[5],
+            'context_label': row[6],
+        }
+
+    def bind_focus_item(self, local_id: str, goalsifter_task_id: str, device_id: str | None = None) -> None:
+        self.cursor.execute('''
+            UPDATE focus_items
+            SET goalsifter_task_id = ?, state = 'bound'
+            WHERE local_id = ?
+        ''', (goalsifter_task_id, local_id))
+        if device_id:
+            self.cursor.execute('''
+                INSERT OR IGNORE INTO focus_outbox (
+                    event_id, device_id, task_id, started_at, ended_at,
+                    duration_minutes, status
+                )
+                SELECT session_id, ?, ?, replace(start_time, ' ', 'T'), replace(end_time, ' ', 'T'),
+                       duration_minutes, 'completed'
+                FROM sessions
+                WHERE project_name = (SELECT project_name FROM focus_items WHERE local_id = ?)
+                  AND task_name = (SELECT task_name FROM focus_items WHERE local_id = ?)
+                  AND session_type = 'Work' AND status = 'Completed'
+            ''', (device_id, goalsifter_task_id, local_id, local_id))
+        self.conn.commit()
+
+    def get_pending_focusflow_events(self) -> List[Dict[str, Any]]:
+        self.cursor.execute('''
+            SELECT event_id, device_id, task_id, started_at, ended_at,
+                   duration_minutes, status
+            FROM focus_outbox ORDER BY rowid
+        ''')
+        return [
+            {
+                'event_id': row[0], 'device_id': row[1], 'task_id': row[2],
+                'started_at': row[3], 'ended_at': row[4],
+                'duration_minutes': row[5], 'status': row[6],
+            }
+            for row in self.cursor.fetchall()
+        ]
+
+    def mark_focusflow_event_synced(self, event_id: str) -> None:
+        """Clear an event only after the server accepted it or confirmed a duplicate."""
+        self.cursor.execute('DELETE FROM focus_outbox WHERE event_id = ?', (event_id,))
+        self.conn.commit()
+
+    def record_focusflow_event_error(self, event_id: str, error: str) -> None:
+        """Keep a failed event retryable with a concise diagnostic for the user."""
+        self.cursor.execute('''
+            UPDATE focus_outbox SET attempts = attempts + 1, last_error = ?
+            WHERE event_id = ?
+        ''', (error[:500], event_id))
+        self.conn.commit()
+
+    def get_local_focus_items(self) -> List[Dict[str, Any]]:
+        """Return active local tasks as offline-first focus-item cards."""
+        self.cursor.execute('''
+            INSERT OR IGNORE INTO focus_items (local_id, project_name, task_name)
+            SELECT lower(hex(randomblob(16))), task.project_name, task.task_name
+            FROM tasks AS task
+            WHERE task.status = 'In Progress'
+              AND task.project_name NOT GLOB '__goalsifter__:*'
+        ''')
+        self.conn.commit()
+        self.cursor.execute('''
+            SELECT focus.local_id, focus.project_name, focus.task_name,
+                   task.estimated_pomodoros, focus.state,
+                   COUNT(session.session_id) AS completed_count
+            FROM focus_items AS focus
+            JOIN tasks AS task
+              ON task.project_name = focus.project_name AND task.task_name = focus.task_name
+            LEFT JOIN sessions AS session
+              ON session.project_name = focus.project_name
+             AND session.task_name = focus.task_name
+             AND session.session_type = 'Work'
+             AND session.status = 'Completed'
+            WHERE task.status = 'In Progress' AND focus.source = 'local' AND focus.state != 'archived'
+            GROUP BY focus.local_id, focus.project_name, focus.task_name,
+                     task.estimated_pomodoros, focus.state
+            ORDER BY focus.project_name, focus.task_name
+        ''')
+        return [
+            {
+                'local_id': row[0], 'project_name': row[1], 'task_name': row[2],
+                'estimate': row[3], 'state': row[4], 'completed_count': row[5],
+            }
+            for row in self.cursor.fetchall()
+        ]
+
+    def archive_local_focus_item(self, project_name: str, task_name: str) -> None:
+        self.cursor.execute('''
+            UPDATE focus_items SET state = 'archived'
+            WHERE project_name = ? AND task_name = ? AND source = 'local'
+        ''', (project_name, task_name))
+        self.conn.commit()
+
+    def restore_local_focus_item(self, project_name: str, task_name: str) -> None:
+        self.cursor.execute('''
+            UPDATE focus_items SET state = 'draft'
+            WHERE project_name = ? AND task_name = ? AND source = 'local'
+        ''', (project_name, task_name))
+        self.conn.commit()
+
+    def get_archived_local_focus_items(self) -> List[Dict[str, Any]]:
+        self.cursor.execute('''
+            SELECT focus.local_id, focus.project_name, focus.task_name, task.estimated_pomodoros
+            FROM focus_items AS focus JOIN tasks AS task
+              ON task.project_name = focus.project_name AND task.task_name = focus.task_name
+            WHERE focus.source = 'local' AND focus.state = 'archived'
+            ORDER BY focus.project_name, focus.task_name
+        ''')
+        return [
+            {'local_id': row[0], 'project_name': row[1], 'task_name': row[2], 'estimate': row[3]}
+            for row in self.cursor.fetchall()
+        ]
+
+    def get_goalsifter_focus_items(self) -> List[Dict[str, Any]]:
+        """Return locally mirrored GoalSifter DWs with their read-only KR context."""
+        self.cursor.execute('''
+            SELECT focus.local_id, focus.project_name, focus.task_name,
+                   task.estimated_pomodoros, focus.state, focus.source,
+                   focus.context_label, focus.goalsifter_task_id,
+                   COUNT(session.session_id) AS completed_count
+            FROM focus_items AS focus
+            JOIN tasks AS task
+              ON task.project_name = focus.project_name AND task.task_name = focus.task_name
+            LEFT JOIN sessions AS session
+              ON session.project_name = focus.project_name
+             AND session.task_name = focus.task_name
+             AND session.session_type = 'Work' AND session.status = 'Completed'
+            WHERE focus.source = 'goalsifter' AND task.status = 'In Progress'
+            GROUP BY focus.local_id, focus.project_name, focus.task_name,
+                     task.estimated_pomodoros, focus.state, focus.source,
+                     focus.context_label, focus.goalsifter_task_id
+            ORDER BY focus.context_label, focus.task_name
+        ''')
+        return [
+            {
+                'local_id': row[0], 'project_name': row[1], 'task_name': row[2],
+                'estimate': row[3], 'state': row[4], 'source': row[5],
+                'context_label': row[6], 'goalsifter_task_id': row[7],
+                'completed_count': row[8],
+            }
+            for row in self.cursor.fetchall()
+        ]
 
     def merge_from(self, source_db_path: str) -> None:
         """
@@ -252,114 +514,6 @@ class PomodoroDataManager:
             print(f"DB verification failed: {e}")
             return False
 
-    def merge_from_cloud(self, cloud_data: Dict[str, Any]) -> int:
-        """
-        Merges data pulled from PocketBase into local SQLite.
-        Strategy: INSERT OR IGNORE for projects/sessions; Last-Write-Wins for tasks.
-        Returns the count of new records inserted.
-        """
-        if not self.conn or not cloud_data:
-            return 0
-
-        def _normalize_dt(dt_str: Optional[str]) -> Optional[str]:
-            """Strip PocketBase's milliseconds/timezone: '2024-01-15 10:30:00.123Z' -> '2024-01-15 10:30:00'"""
-            if not dt_str:
-                return None
-            return dt_str.replace('Z', '').split('.')[0].strip()
-
-        merged = 0
-        try:
-            # 1. Projects — simple upsert, no conflict possible
-            for p in cloud_data.get("projects", []):
-                name = p.get("project_name")
-                if not name:
-                    continue
-                self.cursor.execute(
-                    "INSERT OR IGNORE INTO projects (project_name) VALUES (?)", (name,)
-                )
-                if self.cursor.rowcount:
-                    merged += 1
-
-            # 2. Sessions — local_id in cloud == session_id locally; skip duplicates
-            for s in cloud_data.get("sessions", []):
-                sid = s.get("local_id")
-                if not sid:
-                    continue
-                try:
-                    self.cursor.execute("""
-                        INSERT OR IGNORE INTO sessions (
-                            session_id, project_name, task_name, session_type,
-                            start_time, end_time, duration_minutes, status,
-                            focus_score, end_mood, interruption_reason
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        sid,
-                        s.get("project_name"), s.get("task_name"), s.get("session_type"),
-                        _normalize_dt(s.get("start_time")), _normalize_dt(s.get("end_time")),
-                        s.get("duration_minutes"), s.get("status"),
-                        s.get("focus_score"), s.get("end_mood"), s.get("interruption_reason")
-                    ))
-                    if self.cursor.rowcount:
-                        merged += 1
-                except sqlite3.Error:
-                    pass
-
-            # 3. Tasks — Last-Write-Wins via latest session end_time
-            cloud_sessions = cloud_data.get("sessions", [])
-            for t in cloud_data.get("tasks", []):
-                p_name, t_name = t.get("project_name"), t.get("task_name")
-                if not p_name or not t_name:
-                    continue
-
-                self.cursor.execute(
-                    "SELECT 1 FROM tasks WHERE project_name=? AND task_name=?", (p_name, t_name)
-                )
-                if not self.cursor.fetchone():
-                    # New task from cloud — insert
-                    self.cursor.execute("""
-                        INSERT OR IGNORE INTO tasks
-                            (task_name, project_name, estimated_pomodoros, status, sound_preference)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (
-                        t_name, p_name,
-                        t.get("estimated_pomodoros", 1),
-                        t.get("status", "In Progress"),
-                        t.get("sound_preference", "dida")
-                    ))
-                    merged += 1
-                else:
-                    # Conflict: compare latest session end_time from each side
-                    self.cursor.execute(
-                        "SELECT MAX(end_time) FROM sessions WHERE project_name=? AND task_name=?",
-                        (p_name, t_name)
-                    )
-                    local_time = self.cursor.fetchone()[0] or "1970-01-01"
-
-                    cloud_times = [
-                        _normalize_dt(s.get("end_time")) or "1970-01-01"
-                        for s in cloud_sessions
-                        if s.get("project_name") == p_name and s.get("task_name") == t_name
-                    ]
-                    cloud_time = max(cloud_times, default="1970-01-01")
-
-                    if cloud_time > local_time:
-                        self.cursor.execute("""
-                            UPDATE tasks SET estimated_pomodoros=?, status=?, sound_preference=?
-                            WHERE project_name=? AND task_name=?
-                        """, (
-                            t.get("estimated_pomodoros", 1),
-                            t.get("status", "In Progress"),
-                            t.get("sound_preference", "dida"),
-                            p_name, t_name
-                        ))
-
-            self.conn.commit()
-        except sqlite3.Error as e:
-            print(f"Cloud merge error: {e}")
-            self.conn.rollback()
-
-        return merged
-
     def get_db_last_modified_time(self) -> str:
         """Returns the last modified time of the database file as a string."""
         try:
@@ -392,40 +546,6 @@ class PomodoroDataManager:
             print(f"Error fetching recent tasks: {e}")
             return []
 
-    def get_all_data_for_sync(self) -> Dict[str, Any]:
-        """Returns all local data formatted for a full cloud sync push."""
-        if not self.conn:
-            return {"projects": [], "tasks": [], "sessions": []}
-        try:
-            self.cursor.execute('SELECT project_name FROM projects')
-            projects = [{"project_name": r[0]} for r in self.cursor.fetchall()]
-
-            self.cursor.execute(
-                'SELECT project_name, task_name, estimated_pomodoros, status, sound_preference FROM tasks'
-            )
-            tasks = [
-                {"project_name": r[0], "task_name": r[1], "estimated_pomodoros": r[2],
-                 "status": r[3], "sound_preference": r[4]}
-                for r in self.cursor.fetchall()
-            ]
-
-            self.cursor.execute(
-                '''SELECT session_id, project_name, task_name, session_type,
-                          start_time, end_time, duration_minutes, status,
-                          focus_score, end_mood, interruption_reason FROM sessions'''
-            )
-            sessions = [
-                {"session_id": r[0], "project_name": r[1], "task_name": r[2],
-                 "session_type": r[3], "start_time": r[4], "end_time": r[5],
-                 "duration_minutes": r[6], "status": r[7], "focus_score": r[8],
-                 "end_mood": r[9], "interruption_reason": r[10]}
-                for r in self.cursor.fetchall()
-            ]
-            return {"projects": projects, "tasks": tasks, "sessions": sessions}
-        except sqlite3.Error as e:
-            print(f"Error fetching data for sync: {e}")
-            return {"projects": [], "tasks": [], "sessions": []}
-
     def get_last_feedback_for_task(self, project_name: str, task_name: str) -> Optional[Dict[str, Any]]:
         """Gets the feedback from the most recent session for a specific task."""
         if not all([self.conn, project_name, task_name]): return None
@@ -448,9 +568,6 @@ class PomodoroDataManager:
             self.cursor.execute('INSERT OR IGNORE INTO projects (project_name) VALUES (?)', (project_name,))
             self.conn.commit()
             
-            # Cloud Sync (Async)
-            SyncManager.sync_data("projects", {"project_name": project_name}, record_id=project_name)
-            
         except sqlite3.Error as e:
             print(f"Error adding project: {e}")
 
@@ -464,9 +581,79 @@ class PomodoroDataManager:
             print(f"Error getting projects: {e}")
             return []
 
+    def rename_local_project(self, old_name: str, new_name: str) -> None:
+        """Rename a local project while preserving all dependent local records."""
+        self.cursor.execute('SELECT 1 FROM projects WHERE project_name = ?', (new_name.strip(),))
+        if self.cursor.fetchone():
+            raise ValueError("Target project already exists; use Merge instead")
+        self.merge_local_projects([old_name], new_name)
+
+    def get_local_project_names(self) -> List[str]:
+        return [row['project_name'] for row in self.get_local_project_summaries()]
+
+    def merge_local_projects(self, source_names: List[str], target_name: str) -> None:
+        """Merge local projects transactionally; duplicate task names must be resolved first."""
+        target_name = target_name.strip()
+        sources = list(dict.fromkeys(name.strip() for name in source_names if name.strip()))
+        sources = [name for name in sources if name != target_name]
+        if not target_name or not sources:
+            raise ValueError("Source projects and a distinct target project are required")
+        if target_name.startswith("__goalsifter__:") or any(name.startswith("__goalsifter__:") for name in sources):
+            raise ValueError("GoalSifter mirror projects cannot be managed locally")
+
+        names = sources + [target_name]
+        placeholders = ",".join("?" for _ in names)
+        self.cursor.execute(f'''
+            SELECT task_name FROM tasks
+            WHERE project_name IN ({placeholders})
+            GROUP BY task_name HAVING COUNT(*) > 1
+            ORDER BY task_name
+        ''', names)
+        conflicts = [row[0] for row in self.cursor.fetchall()]
+        if conflicts:
+            raise ValueError("Conflicting task names: " + ", ".join(conflicts))
+
+        with self.conn:
+            self.conn.execute('INSERT OR IGNORE INTO projects (project_name) VALUES (?)', (target_name,))
+            for source in sources:
+                self.conn.execute('UPDATE tasks SET project_name = ? WHERE project_name = ?', (target_name, source))
+                self.conn.execute('UPDATE sessions SET project_name = ? WHERE project_name = ?', (target_name, source))
+                self.conn.execute('UPDATE focus_items SET project_name = ? WHERE project_name = ?', (target_name, source))
+                self.conn.execute('DELETE FROM projects WHERE project_name = ?', (source,))
+
+    def get_local_project_summaries(self) -> List[Dict[str, Any]]:
+        """Return local-only project counts for the management window."""
+        self.cursor.execute('''
+            SELECT project.project_name,
+                   COUNT(task.task_name) AS task_count,
+                   SUM(CASE WHEN focus.state = 'archived' THEN 1 ELSE 0 END) AS archived_count
+            FROM projects AS project
+            LEFT JOIN tasks AS task ON task.project_name = project.project_name
+            LEFT JOIN focus_items AS focus
+              ON focus.project_name = task.project_name AND focus.task_name = task.task_name
+             AND focus.source = 'local'
+            WHERE project.project_name NOT GLOB '__goalsifter__:*'
+            GROUP BY project.project_name ORDER BY project.project_name
+        ''')
+        return [
+            {'project_name': row[0], 'task_count': row[1], 'archived_count': row[2] or 0}
+            for row in self.cursor.fetchall()
+        ]
+
+    def delete_empty_local_project(self, project_name: str) -> None:
+        if project_name.startswith("__goalsifter__:"):
+            raise ValueError("GoalSifter mirror projects cannot be managed locally")
+        self.cursor.execute('SELECT COUNT(*) FROM tasks WHERE project_name = ?', (project_name,))
+        if self.cursor.fetchone()[0]:
+            raise ValueError("Project contains tasks; merge or archive them first")
+        self.cursor.execute('DELETE FROM projects WHERE project_name = ?', (project_name,))
+        self.conn.commit()
+
     def add_or_update_task(self, project_name: str, task_name: str, estimate: int, sound_preference: str = 'dida') -> None:
         """Adds a new task or updates an existing one."""
         if not all([self.conn, project_name, task_name]): return
+        if not 1 <= estimate <= 99:
+            raise ValueError("Focus item estimate must be between 1 and 99")
         self.add_project(project_name)
         try:
             self.cursor.execute('''
@@ -477,18 +664,8 @@ class PomodoroDataManager:
                     status='In Progress',
                     sound_preference=excluded.sound_preference
             ''', (project_name, task_name, estimate, sound_preference))
+            self.ensure_focus_item(project_name, task_name)
             self.conn.commit()
-            
-            # Cloud Sync (Async)
-            sync_payload = {
-                "project_name": project_name,
-                "task_name": task_name,
-                "estimated_pomodoros": estimate,
-                "status": "In Progress",
-                "sound_preference": sound_preference
-            }
-            # Use project_name + task_name as a composite unique identifier for sync
-            SyncManager.sync_data("tasks", sync_payload, record_id=f"{project_name}_{task_name}")
             
         except sqlite3.Error as e:
             print(f"Error adding/updating task: {e}")
@@ -499,14 +676,6 @@ class PomodoroDataManager:
         try:
             self.cursor.execute("UPDATE tasks SET status = 'Completed' WHERE project_name = ? AND task_name = ?", (project_name, task_name))
             self.conn.commit()
-            
-            # Cloud Sync (Async)
-            sync_payload = {
-                "project_name": project_name,
-                "task_name": task_name,
-                "status": "Completed"
-            }
-            SyncManager.sync_data("tasks", sync_payload, record_id=f"{project_name}_{task_name}")
             
         except sqlite3.Error as e:
             print(f"Error marking task as complete: {e}")
@@ -520,11 +689,6 @@ class PomodoroDataManager:
             self.cursor.execute("DELETE FROM projects WHERE project_name = ?", (project_name,))
             self.conn.commit()
             
-            # Cloud Sync: We don't have a specific delete in SyncManager yet, 
-            # but we can add it or just log it. For now, let's just use a special flag or separate method.
-            # However, deletions are sensitive. Let's skip for now unless requested or implement a simple delete.
-            SyncManager.delete_record("projects", project_name)
-            
         except sqlite3.Error as e:
             print(f"Error deleting project: {e}")
 
@@ -534,7 +698,6 @@ class PomodoroDataManager:
         try:
             self.cursor.execute("DELETE FROM tasks WHERE project_name = ? AND task_name = ?", (project_name, task_name))
             self.conn.commit()
-            SyncManager.delete_record("tasks", f"{project_name}_{task_name}")
         except sqlite3.Error as e:
             print(f"Error deleting task: {e}")
 

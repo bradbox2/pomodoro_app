@@ -5,17 +5,17 @@ import shutil
 import random
 import filecmp
 import logging
-import threading
+import sqlite3
 from pathlib import Path
 import customtkinter as ctk
-from tkinter import messagebox, filedialog  # Keep these for dialogs
+from tkinter import messagebox, filedialog, simpledialog  # Keep these for dialogs
 from datetime import datetime
 import re
 from typing import Optional
 
 from config import *
 from ctk_theme_config import ThemeManager
-from pb_sync_manager import PBSyncManager
+from app_paths import AppPaths
 from pomodoro_timer import PomodoroTimer
 from pomodoro_data_manager import PomodoroDataManager
 from sound_manager import SoundManager
@@ -23,6 +23,8 @@ from ui_manager import UIManager, DateRangeDialog
 from analysis_manager import AnalysisManager
 from feedback_window import FeedbackWindow
 from interruption_window import InterruptionWindow
+from goalsifter_client import GoalSifterClient, GoalSifterRemoteError
+from goalsifter_settings import GoalSifterSettings
 
 def get_base_path():
     """Gets the base path, ensuring it works for both script and PyInstaller-packaged exe."""
@@ -50,7 +52,9 @@ class PomodoroApp:
         
         # --- Paths ---
         self.base_dir = get_base_path()
-        self.data_dir = os.path.join(self.base_dir, "data")
+        self.paths = AppPaths.from_environment(Path(self.base_dir))
+        self.paths.ensure_ready()
+        self.data_dir = str(self.paths.data_dir)
         self.image_dir = os.path.join(self.base_dir, "images")
         self.sound_dir = os.path.join(self.base_dir, "sound")
         
@@ -71,15 +75,18 @@ class PomodoroApp:
 
         # --- Modules (Initialized in Order) ---
         self.data_manager = PomodoroDataManager(self.data_dir, DB_NAME)
+        self.goalsifter_settings = GoalSifterSettings.load(self.paths)
+        self.goalsifter_client = GoalSifterClient(self.goalsifter_settings)
+        self.goalsifter_tunnel = None
         
         # 1. SoundManager (含事件系统)
         self.sound_manager = SoundManager(self.sound_dir) 
         
-        self.analysis_manager = AnalysisManager(self.data_manager, self.base_dir) 
+        self.analysis_manager = AnalysisManager(self.data_manager, self.paths.exports_dir, self.paths.config_path)
         self.timer = PomodoroTimer(WORK_MIN, SHORT_BREAK_MIN, LONG_BREAK_MIN, self.update_timer_display, self.on_timer_finish)
         
         # --- UI ---
-        all_projects = self.data_manager.get_all_projects()
+        all_projects = self.data_manager.get_local_project_names()
         self.ui = UIManager(
             self.root,
             self.handle_action_button,
@@ -88,12 +95,17 @@ class PomodoroApp:
             self.quick_start_session,
             self.load_backup,
             self.merge_databases,
-            self.sync_to_cloud,
             self.switch_sound_mode,
             self.delete_project_handler,
             self.delete_task_handler,
             self.handle_home_button,
             self.toggle_theme,  # New callback
+            self.select_local_focus_item,
+            self.refresh_goalsifter_tasks,
+            self.sync_goalsifter_outbox,
+            self.bind_current_focus_item,
+            self.create_and_bind_current_focus_item,
+            self.show_local_task_manager,
             self.image_dir,
             all_projects,
             self.sound_manager  # Pass sound_manager reference
@@ -105,9 +117,7 @@ class PomodoroApp:
         self.current_project = ""
         self.current_task = ""
         self.current_task_estimate = 1
-        self.current_kr_ref = ""
-        self._cloud_task_map: dict = {}    # display_str → {task, kr, pomodoros_est, ...}
-        self._cloud_projects: dict = {}    # project_name → [display_str, ...]
+        self.current_focus_source = "local"
 
         # --- Init ---
         self.setup_window_properties()
@@ -118,12 +128,6 @@ class PomodoroApp:
 
         # === 【新增】启动事件监听循环 ===
         self.check_pygame_events()
-
-        # --- PocketBase Sync (OpenClaw server, async, non-blocking) ---
-        self.pb_sync = PBSyncManager(self.data_dir, on_connected=self._on_pb_connected)
-
-        # --- Startup Cloud Pull (async, non-blocking) ---
-        self._startup_cloud_pull()
 
         # --- Runtime Session Tracking ---
         # Stores session counts for the current runtime: {(project_name, task_name): count}
@@ -150,7 +154,7 @@ class PomodoroApp:
         bak2_path = db_path + ".bak2"
         
         # Setup basic logging
-        logging.basicConfig(filename=os.path.join(self.data_dir, 'backup.log'), 
+        logging.basicConfig(filename=str(self.paths.logs_dir / 'backup.log'),
                             level=logging.INFO, 
                             format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -187,7 +191,7 @@ class PomodoroApp:
 
     def setup_window_properties(self) -> None:
         """Sets window properties like 'Always on Top' based on configuration."""
-        if ALWAYS_ON_TOP: self.root.attributes('-topmost', 1)
+        self.root.attributes('-topmost', False)
 
     def _truncate_text(self, text: str, max_length: int = 20) -> str:
         """Truncates text with ellipsis if it exceeds max_length."""
@@ -244,70 +248,6 @@ class PomodoroApp:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to merge: {e}")
 
-    def _startup_cloud_pull(self) -> None:
-        """On startup, PBSyncManager handles its own async connection + offline queue flush.
-        Schedule a cloud task fetch after the tunnel has time to connect (~4s)."""
-        self.root.after(4000, self._refresh_cloud_tasks)
-
-    def _on_pb_connected(self) -> None:
-        """Called by PBSyncManager background thread when tunnel + auth succeed.
-        Runs _refresh_cloud_tasks on the main thread so the task list updates
-        even if the initial 4s startup fetch fired before the connection was ready."""
-        self.root.after(0, self._refresh_cloud_tasks)
-
-    def _refresh_cloud_tasks(self) -> None:
-        """Fetch today's active tasks from cloud, group by project, populate dropdowns."""
-        def _fetch():
-            tasks = self.pb_sync.get_today_tasks()
-            if not tasks:
-                return
-            by_project: dict = {}
-            display_map: dict = {}
-            for t in tasks:
-                proj = t.get("project", "FocusFlow")
-                est = t.get("pomodoros_est", 0)
-                display = f"{t['task']} ({est}🍅)" if est else t['task']
-                by_project.setdefault(proj, []).append(display)
-                display_map[display] = t
-
-            def _update():
-                self._cloud_task_map = display_map
-                self._cloud_projects = by_project
-                cloud_proj_list = list(by_project.keys())
-                local_projects = self.data_manager.get_all_projects()
-                merged = cloud_proj_list + [p for p in local_projects if p not in cloud_proj_list]
-                self.ui.project_combobox.configure(values=merged)
-                if cloud_proj_list:
-                    self.ui.project_var.set(cloud_proj_list[0])
-                    self.ui.set_task_list(by_project[cloud_proj_list[0]])
-                    self.ui.task_var.set('')
-
-            self.root.after(0, _update)
-
-        threading.Thread(target=_fetch, daemon=True).start()
-
-    def sync_to_cloud(self) -> None:
-        """Manually flushes offline-queued sessions to PocketBase and refreshes cloud tasks."""
-        if not PB_SYNC_ENABLED:
-            messagebox.showinfo("Sync Disabled", "Cloud sync is disabled in config.")
-            return
-
-        self.ui.set_sync_button_state("Syncing...", "#F4A261")
-
-        def _flush():
-            try:
-                flushed = self.pb_sync.queue.flush(self.pb_sync.pb)
-                label = f"Synced {flushed} ✓" if flushed else "Synced ✓"
-                self.root.after(0, lambda: self.ui.set_sync_button_state(label, "#52B788"))
-                self.root.after(3000, lambda: self.ui.set_sync_button_state("Sync", "#888888"))
-                # Refresh task list from cloud
-                self.root.after(500, self._refresh_cloud_tasks)
-            except Exception:
-                self.root.after(0, lambda: self.ui.set_sync_button_state("Sync Failed", "#e76f51"))
-                self.root.after(3000, lambda: self.ui.set_sync_button_state("Sync", "#888888"))
-
-        threading.Thread(target=_flush, daemon=True).start()
-
     def delete_project_handler(self) -> None:
         """Handles deletion of the currently selected project."""
         project = self.ui.get_project_name()
@@ -350,10 +290,10 @@ class PomodoroApp:
                     'end_time': datetime.now(),
                     'duration_minutes': duration,
                     'status': "Interrupted",
-                    'interruption_reason': "Task Switching"
+                    'interruption_reason': "Task Switching",
+                    'device_id': self.goalsifter_settings.device_id,
                 }
                 self.data_manager.record_session(session_data)
-                self.pb_sync.record_session(session_data, kr_ref=self.current_kr_ref)  # async, non-blocking
 
             # Disable particles
             self.ui.set_timer_mode('None')
@@ -389,9 +329,6 @@ class PomodoroApp:
         self.ui.task_var.set('')
         self.ui.estimate_var.set('1')
         self.ui.update_progress("")
-        if project_name in self._cloud_projects:
-            self.ui.set_task_list(self._cloud_projects[project_name])
-            return
         self.ui.set_sound_choice('dida')
         tasks_data = self.data_manager.get_tasks_with_stats(project_name, include_completed=False)
         formatted_tasks = [f"{t['name']} ({t['count']})" for t in tasks_data]
@@ -402,19 +339,6 @@ class PomodoroApp:
         project_name = self.ui.get_project_name()
         raw_task_name = self.ui.get_task_name()
 
-        # Cloud task: look up in map by display string, extract kr_ref and estimate
-        if raw_task_name in self._cloud_task_map:
-            t = self._cloud_task_map[raw_task_name]
-            self.current_kr_ref = t.get("kr", "")
-            est = t.get("pomodoros_est", 1) or 1
-            self.ui.set_estimate(est)
-            # Show local progress if any prior sessions exist
-            clean = t["task"]
-            done = self.data_manager.get_completed_work_sessions_for_task(project_name, clean)
-            self.ui.update_progress(f"({done} / {est})" if done else "")
-            return
-
-        self.current_kr_ref = ""
         task_name = self._get_clean_task_name(raw_task_name)
         if project_name and task_name:
             details = self.data_manager.get_task_details(project_name, task_name)
@@ -424,6 +348,233 @@ class PomodoroApp:
                 self.ui.update_progress(f"({completed_count} / {details['estimate']})")
                 if details.get("sound"):
                     self.ui.set_sound_choice(details["sound"])
+
+    def select_local_focus_item(self, item: dict) -> None:
+        """Make a card the current task; starting remains an explicit action."""
+        self.ui.project_var.set(item["project_name"])
+        self.ui.task_var.set(item["task_name"])
+        self.ui.set_estimate(item["estimate"])
+        details = self.data_manager.get_task_details(item["project_name"], item["task_name"])
+        if details and details.get("sound"):
+            self.ui.set_sound_choice(details["sound"])
+        self.ui.update_progress(f'({item["completed_count"]} / {item["estimate"]})')
+        self.current_project = item["project_name"]
+        self.current_task = item["task_name"]
+        self.current_task_estimate = item["estimate"]
+        self.current_focus_source = item.get("source", "local")
+
+    def refresh_goalsifter_tasks(self) -> None:
+        """Fetch active DWs only after an explicit user refresh request."""
+        if not self.goalsifter_settings.is_configured:
+            self.ui.refresh_goalsifter_focus_items(
+                [], "GoalSifter 尚未配置 SSH alias 与 Bearer token。"
+            )
+            return
+        try:
+            if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
+                self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
+                self.root.after(350, self._load_goalsifter_tasks)
+                self.ui.refresh_goalsifter_focus_items([], "正在连接 GoalSifter…")
+                return
+            self._load_goalsifter_tasks()
+        except (GoalSifterRemoteError, OSError) as error:
+            self.ui.refresh_goalsifter_focus_items([], f"GoalSifter 不可用：{error}")
+
+    def _load_goalsifter_tasks(self) -> None:
+        try:
+            for task in self.goalsifter_client.get_active_dw_tasks():
+                self.data_manager.upsert_goalsifter_focus_item(task.__dict__)
+            self.ui.refresh_goalsifter_focus_items(
+                self.data_manager.get_goalsifter_focus_items(), "已加载活跃 DW。"
+            )
+            self.update_db_status()
+        except GoalSifterRemoteError as error:
+            self.ui.refresh_goalsifter_focus_items([], f"GoalSifter 不可用：{error}")
+
+    def sync_goalsifter_outbox(self) -> None:
+        """Upload queued immutable events only after the user presses sync."""
+        if not self.goalsifter_settings.is_configured:
+            self.ui.refresh_goalsifter_focus_items([], "GoalSifter 尚未配置 SSH alias 与 Bearer token。")
+            return
+        try:
+            if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
+                self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
+                self.ui.refresh_goalsifter_focus_items([], "正在连接 GoalSifter 并同步 Outbox…")
+                self.root.after(350, self._sync_pending_goalsifter_events)
+                return
+            self._sync_pending_goalsifter_events()
+        except (GoalSifterRemoteError, OSError) as error:
+            self.ui.refresh_goalsifter_focus_items([], f"无法同步 Outbox：{error}")
+
+    def bind_current_focus_item(self) -> None:
+        """Explicitly bind the selected local item to a known remote DW id."""
+        if not self.current_project or not self.current_task:
+            messagebox.showinfo("选择本地任务", "请先在“本地任务”中单击一个任务卡。")
+            return
+        if self.current_focus_source != "local":
+            messagebox.showinfo("仅限本地任务", "远端 DW 已绑定；请在 GoalSifter 中管理它。")
+            return
+        if self.current_task_estimate > 4:
+            messagebox.showwarning("需要拆分", "本地预估超过 4 个番茄。请拆成多个 DW 后分别绑定。")
+            return
+        task_id = simpledialog.askstring("绑定已有 DW", "输入 GoalSifter DW 的 task_id：", parent=self.root)
+        if not task_id:
+            return
+        item = self.data_manager.ensure_focus_item(self.current_project, self.current_task)
+        self.data_manager.bind_focus_item(item['local_id'], task_id.strip(), self.goalsifter_settings.device_id)
+        self.reset_state_and_ui()
+        messagebox.showinfo("已绑定", "本地任务已绑定；已完成的历史番茄已进入 Outbox，需由你手动同步。")
+
+    def create_and_bind_current_focus_item(self) -> None:
+        """Create a DW through the locked API, then explicitly bind the local item."""
+        if not self.current_project or not self.current_task:
+            messagebox.showinfo("选择本地任务", "请先在“本地任务”中单击一个任务卡。")
+            return
+        if self.current_focus_source != "local":
+            messagebox.showinfo("仅限本地任务", "远端 DW 已绑定；请在 GoalSifter 中管理它。")
+            return
+        if self.current_task_estimate > 4:
+            messagebox.showwarning("需要拆分", "本地预估超过 4 个番茄。请拆成多个 DW 后分别绑定。")
+            return
+        if not self.goalsifter_settings.is_configured:
+            messagebox.showwarning("GoalSifter 未配置", "请先配置 SSH alias 与 Bearer token。")
+            return
+        try:
+            if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
+                self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
+                self.root.after(350, self.create_and_bind_current_focus_item)
+                return
+            result = self.goalsifter_client.create_dw_task(self.current_task, self.current_task_estimate)
+            item = self.data_manager.ensure_focus_item(self.current_project, self.current_task)
+            self.data_manager.bind_focus_item(item['local_id'], result['task_id'], self.goalsifter_settings.device_id)
+            self.reset_state_and_ui()
+            messagebox.showinfo("已创建并绑定", "新 DW 已创建；历史番茄需要由你手动同步。")
+        except GoalSifterRemoteError as error:
+            if error.status_code == 422:
+                messagebox.showwarning("需要澄清", "GoalSifter 拒绝创建该任务，请回 TTC/GoalSifter 完成澄清后再绑定。")
+            else:
+                messagebox.showerror("创建失败", f"GoalSifter 不可用：{error}")
+
+    def _sync_pending_goalsifter_events(self) -> None:
+        synced = 0
+        for event in self.data_manager.get_pending_focusflow_events():
+            try:
+                result = self.goalsifter_client.post_pomo_event(event)
+                if result.get('event_id') != event['event_id'] or 'duplicate' not in result:
+                    raise GoalSifterRemoteError(502, "GoalSifter returned an invalid event acknowledgement")
+                self.data_manager.mark_focusflow_event_synced(event['event_id'])
+                synced += 1
+            except GoalSifterRemoteError as error:
+                self.data_manager.record_focusflow_event_error(event['event_id'], str(error))
+                self.ui.refresh_goalsifter_focus_items(
+                    self.data_manager.get_goalsifter_focus_items(),
+                    f"已同步 {synced} 条；其余保留待同步：{error}",
+                )
+                return
+        self.ui.refresh_goalsifter_focus_items(
+            self.data_manager.get_goalsifter_focus_items(), f"已同步 {synced} 条 Outbox 事件。"
+        )
+
+    def show_local_task_manager(self) -> None:
+        """Manage local projects and their tasks without touching GoalSifter KR data."""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("管理本地任务")
+        dialog.geometry("760x560")
+        dialog.transient(self.root)
+        toolbar = ctk.CTkFrame(dialog)
+        toolbar.pack(fill="x", padx=12, pady=(12, 6))
+        project_var = ctk.StringVar()
+        project_picker = ctk.CTkComboBox(toolbar, variable=project_var, width=260)
+        project_picker.pack(side="left", padx=6, pady=8)
+        task_body = ctk.CTkScrollableFrame(dialog)
+        task_body.pack(fill="both", expand=True, padx=12, pady=(6, 12))
+
+        def refresh_tasks(_choice=None):
+            for widget in task_body.winfo_children():
+                widget.destroy()
+            project = project_var.get().strip()
+            ctk.CTkLabel(task_body, text=project or "请选择本地 Project", font=("Segoe UI", 18, "bold")).pack(anchor="w", pady=(0, 8))
+            if not project:
+                return
+            active = [item for item in self.data_manager.get_local_focus_items() if item['project_name'] == project]
+            archived = [item for item in self.data_manager.get_archived_local_focus_items() if item['project_name'] == project]
+            ctk.CTkLabel(task_body, text="活跃任务", font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(0, 4))
+            for item in active:
+                row = ctk.CTkFrame(task_body)
+                row.pack(fill="x", pady=3)
+                ctk.CTkLabel(row, text=f'{item["task_name"]}  ·  {item["completed_count"]}/{item["estimate"]}', justify="left").pack(side="left", fill="x", expand=True, padx=8, pady=6)
+                ctk.CTkButton(row, text="归档", width=70, command=lambda value=item: archive(value)).pack(side="right", padx=6)
+            ctk.CTkLabel(task_body, text="已归档", font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(16, 4))
+            for item in archived:
+                row = ctk.CTkFrame(task_body)
+                row.pack(fill="x", pady=3)
+                ctk.CTkLabel(row, text=f'{item["task_name"]}  ·  预估 {item["estimate"]}', justify="left").pack(side="left", fill="x", expand=True, padx=8, pady=6)
+                ctk.CTkButton(row, text="恢复", width=70, command=lambda value=item: restore(value)).pack(side="right", padx=6)
+
+        def refresh_projects(select=None):
+            values = [row['project_name'] for row in self.data_manager.get_local_project_summaries()]
+            project_picker.configure(values=values)
+            chosen = select if select in values else (values[0] if values else "")
+            project_var.set(chosen)
+            refresh_tasks()
+
+        def rename_project():
+            source = project_var.get().strip()
+            target = simpledialog.askstring("重命名 Project", "新的本地分类名称：", initialvalue=source, parent=dialog)
+            if not target or target.strip() == source:
+                return
+            try:
+                self.data_manager.rename_local_project(source, target.strip())
+                self.reset_state_and_ui()
+                refresh_projects(target.strip())
+            except ValueError as error:
+                messagebox.showwarning("无法重命名", str(error), parent=dialog)
+
+        def merge_project():
+            selected = project_var.get().strip()
+            raw_sources = simpledialog.askstring(
+                "合并 Project", "要合并的来源分类（多个名称用英文逗号分隔）：",
+                initialvalue=selected, parent=dialog,
+            )
+            if not raw_sources:
+                return
+            sources = [name.strip() for name in raw_sources.split(',') if name.strip()]
+            target = simpledialog.askstring("合并 Project", "合并到哪个本地分类（可输入新名称）：", parent=dialog)
+            if not target:
+                return
+            try:
+                self.data_manager.merge_local_projects(sources, target.strip())
+                self.reset_state_and_ui()
+                refresh_projects(target.strip())
+            except (ValueError, sqlite3.IntegrityError) as error:
+                messagebox.showwarning("存在冲突", str(error), parent=dialog)
+
+        def delete_empty_project():
+            project = project_var.get().strip()
+            if not project or not messagebox.askyesno("删除空 Project", f"删除空分类“{project}”？", parent=dialog):
+                return
+            try:
+                self.data_manager.delete_empty_local_project(project)
+                self.reset_state_and_ui()
+                refresh_projects()
+            except ValueError as error:
+                messagebox.showwarning("无法删除", str(error), parent=dialog)
+
+        def archive(item):
+            self.data_manager.archive_local_focus_item(item['project_name'], item['task_name'])
+            self.reset_state_and_ui()
+            refresh_tasks()
+
+        def restore(item):
+            self.data_manager.restore_local_focus_item(item['project_name'], item['task_name'])
+            self.reset_state_and_ui()
+            refresh_tasks()
+
+        project_picker.configure(command=refresh_tasks)
+        ctk.CTkButton(toolbar, text="重命名", width=80, command=rename_project).pack(side="left", padx=3)
+        ctk.CTkButton(toolbar, text="合并到…", width=80, command=merge_project).pack(side="left", padx=3)
+        ctk.CTkButton(toolbar, text="删除空分类", width=95, command=delete_empty_project).pack(side="left", padx=3)
+        refresh_projects()
 
     def update_timer_display(self, time_str: str) -> None:
         """Thread-safe update of the timer UI."""
@@ -440,11 +591,9 @@ class PomodoroApp:
             if messagebox.askyesno("Timer Running", "Quit while timer is running?"):
                 self.abort_session(is_closing=True)
                 self.data_manager.close()
-                self.pb_sync.stop()
                 self.root.destroy()
         else:
             self.data_manager.close()
-            self.pb_sync.stop()
             self.root.destroy()
 
     def start_session(self, project_name: Optional[str] = None, task_name: Optional[str] = None) -> None:
@@ -461,6 +610,16 @@ class PomodoroApp:
         if not task_name:
              messagebox.showwarning("Input Required", "Please enter a task name.")
              return
+
+        selected_details = None
+        selected_estimate = None
+        if self.current_session_type == 'Work':
+            selected_details = self.data_manager.get_task_details(project_name, task_name)
+            try:
+                selected_estimate = selected_details['estimate'] if selected_details else self.ui.get_estimate()
+            except ValueError:
+                messagebox.showwarning("Estimate Required", "Please use an estimate between 1 and 4. Split larger tasks first.")
+                return
         
         self.is_running = True
         self.ui.toggle_action_button(is_running=True)
@@ -476,8 +635,7 @@ class PomodoroApp:
         if self.current_session_type == 'Work':
             self.root.attributes('-alpha', FOCUSED_TRANSPARENCY)
             self.current_project, self.current_task = project_name, task_name
-            details = self.data_manager.get_task_details(project_name, task_name)
-            self.current_task_estimate = details['estimate'] if details else self.ui.get_estimate()
+            self.current_task_estimate = selected_estimate
             
             sound_choice = self.ui.get_sound_choice() 
             self.data_manager.add_or_update_task(project_name, task_name, self.current_task_estimate, sound_choice)
@@ -512,28 +670,22 @@ class PomodoroApp:
             self.sound_manager.stop_bg_sound()
 
         self.is_running = False
-        self.current_kr_ref = ""
         self.ui.toggle_action_button(is_running=False)
         self.ui.toggle_secondary_button(is_running=False)
         self.root.attributes('-alpha', 1.0)
 
-        local_projects = self.data_manager.get_all_projects()
-        if self._cloud_projects:
-            cloud_proj_list = list(self._cloud_projects.keys())
-            merged = cloud_proj_list + [p for p in local_projects if p not in cloud_proj_list]
-            self.ui.set_project_list(merged)
-            first = cloud_proj_list[0]
-            self.ui.project_var.set(first)
-            self.ui.set_task_list(self._cloud_projects[first])
+        local_projects = self.data_manager.get_local_project_names()
+        local_focus_items = self.data_manager.get_local_focus_items()
+        self.ui.refresh_local_focus_items(local_focus_items)
+        self.ui.task_source_tabs.set("本地任务")
+        self.ui.set_project_list(local_projects)
+        if local_projects:
+            first_local = local_projects[0]
+            self.ui.project_var.set(first_local)
+            local_tasks = self.data_manager.get_tasks_for_project(first_local)
+            self.ui.set_task_list(local_tasks)
         else:
-            self.ui.set_project_list(local_projects)
-            if local_projects:
-                first_local = local_projects[0]
-                self.ui.project_var.set(first_local)
-                local_tasks = self.data_manager.get_tasks_for_project(first_local)
-                self.ui.set_task_list(local_tasks)
-            else:
-                self.ui.set_task_list([])
+            self.ui.set_task_list([])
 
         self.ui.task_var.set('')
         self.ui.estimate_var.set('1')
@@ -606,11 +758,10 @@ class PomodoroApp:
                 'project_name': self.current_project, 'task_name': self.current_task,
                 'session_type': self.current_session_type, 'start_time': start_time,
                 'end_time': datetime.now(), 'duration_minutes': duration,
-                'status': status, 'interruption_reason': interruption_reason, **feedback
+                'status': status, 'interruption_reason': interruption_reason,
+                'device_id': self.goalsifter_settings.device_id, **feedback
             }
             self.data_manager.record_session(session_data)
-            if self.current_session_type == 'Work':
-                self.pb_sync.record_session(session_data, kr_ref=self.current_kr_ref)  # async, non-blocking
             self.update_db_status()
 
     def _handle_session_finish(self, session_type: str, duration: int, status: str) -> None:
@@ -635,7 +786,8 @@ class PomodoroApp:
             self.data_manager.record_session({
                 'project_name': self.current_project, 'task_name': self.current_task,
                 'session_type': session_type, 'start_time': self.timer.start_time,
-                'end_time': datetime.now(), 'duration_minutes': duration, 'status': status
+                'end_time': datetime.now(), 'duration_minutes': duration, 'status': status,
+                'device_id': self.goalsifter_settings.device_id,
             })
             self.update_db_status()
             self._setup_next_work_session()

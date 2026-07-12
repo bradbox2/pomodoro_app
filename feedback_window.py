@@ -52,7 +52,7 @@ class FeedbackWindow(Toplevel):
         
         # Load moods from config
         from app_config_manager import AppConfigManager
-        config_manager = AppConfigManager(os.path.dirname(os.path.abspath(__file__)))
+        config_manager = AppConfigManager()
         moods = config_manager.get_feedback_moods()
         
         s = ttk.Style()

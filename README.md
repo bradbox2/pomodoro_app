@@ -12,9 +12,9 @@
 ### 2. 安装与运行
 1. **创建并激活虚拟环境**:
    ```bash
-   python -m venv envipomo
+   py -3.11 -m venv .venv
    # Windows 激活:
-   envipomo\Scripts\activate
+   .venv\Scripts\activate
    ```
 2. **安装依赖**:
    ```bash
@@ -22,16 +22,33 @@
    ```
 3. **启动应用**:
    ```bash
-   python main.py
+   .venv\Scripts\python.exe main.py
    ```
 
 ---
 
 ## 💡 使用指南 (User Guide)
 
+## 💾 本地数据与迁移
+
+FocusFlow 只使用本机 SQLite，不会连接 PocketBase、SSH 或任何云同步服务。可变用户数据默认保存在
+`%LOCALAPPDATA%\FocusFlow`：数据库、`config.json`、备份、日志和导出的 HTML 报表都在这里。首次启动会从
+项目目录的旧 `data/` 与 `config.json` 复制数据；原文件不会被删除，且已经存在的本地文件不会被覆盖。
+
+需要将数据放在 U 盘、办公室电脑专用目录或备份目录时，可在启动前设置 `FOCUSFLOW_DATA_DIR`。迁移到另一台电脑时，
+复制整个数据目录即可；也可以使用应用内的 Backup 和 Merge 功能恢复或合并数据库。
+
+### GoalSifter 连接凭据
+
+第二阶段启用时，用户需要手动填写 SSH Host alias 与 GoalSifter Bearer token。两者仅保存
+在当前 Windows 用户的 `%LOCALAPPDATA%\FocusFlow\goalsifter_settings.json` 中；首次运行会生成带稳定
+`device_id` 的文件。SSH 连接只建立到 VPS 回环地址的本地端口转发；应用不会、也不得通过 SSH 读取 VPS 上的
+token 文件。Token 被撤销或更换后，必须在本机该文件（后续设置界面）中显式更新。
+
 ### 第一步：设置任务 (Setup)
-*   **项目与任务**：从下拉框选择已有项目，或直接输入新名称。支持分层管理。
-*   **预估番茄数**：设定你预计完成任务需要的番茄数（用于进度条显示）。
+*   **本地任务 / GoalSifter 任务**：本地页用于离线草稿与本地分类；第二个来源只读展示远端活跃 DW，不会改写远端 KR。
+*   **本地 Project 管理**：本地分类可重命名、合并或删除空分类；旧的无效分类可以收敛成更少的可维护项目。
+*   **预估番茄数**：本地草稿可继续保留较大的个人预估值用于进度显示；绑定 GoalSifter DW 时仍遵守 1–4 的契约口径。
 *   **声音模式**：
     - **Ticking**: 经典计时器滴答声。
     - **Music**: 随机背景音乐（自动避开上一首，保持新鲜感）。
@@ -41,6 +58,7 @@
 *   **视觉特效**：进入计时后，应用会根据主题开启“黑洞粒子”或“禅意专注”特效。
 *   **专注透明度**：窗口自动变为半透明（可配置），帮助你无干扰地操作背景窗口。
 *   **进度追踪**：底部展示实时完成进度（如：`🍅 🍅 🍅` 表示今日完成总数）。
+*   **窗口尺寸**：首页和管理页按内容自适应，不再保留大面积空白；真正置顶的是 300×400 的计时页。
 
 ### 第三步：反馈与分析 (Analysis)
 *   **中断记录**：若中途放弃，请记录中断原因（内部/外部），这对于后续优化工作流程至关重要。
@@ -87,7 +105,7 @@
 | **`app_config_manager.py`** | 统一管理 `config.json` 的加载与默认值生成。 | 处理配置读写逻辑时使用。 |
 | **`visual_effects.py`** | 封装 Pygame 粒子特效（BlackHole, ZenFocus）。 | 优化渲染性能或修改粒子动画时使用。 |
 | **`config.py`** | 全局**基础配置**（时长、颜色、尺寸、透明度）。 | 修改 `WORK_MIN` 或 `FOCUSED_TRANSPARENCY` 时直接编辑。 |
-| **`config.json`** | 用户**动态配置**（中断原因分类、反馈心情列表）。 | 直接编辑此 JSON 即可动态增删 UI 中的选择项。 |
+| **`%LOCALAPPDATA%\\FocusFlow\\config.json`** | 用户**动态配置**（中断原因分类、反馈心情列表）。 | 直接编辑此 JSON 即可动态增删 UI 中的选择项。 |
 
 ### 2. 数据库结构 (Schema)
 
@@ -96,9 +114,10 @@
 *   **`sessions`**: 记录每次会话的起止时间、类型、时长、评分、心情及中断原因。
 
 ### 3. 开发提示
-*   **添加中断原因**: 编辑 `config.json` 中的 `interruptions` 字典。
+*   **添加中断原因**: 编辑 `%LOCALAPPDATA%\\FocusFlow\\config.json` 中的 `interruptions` 字典。
 *   **修改 UI 颜色**: 编辑 `ctk_theme_config.py` 中的 `ThemeManager` 常量。
 *   **运行测试**: 核心逻辑测试脚本位于 `tests/` 目录；调试工具位于 `tools/`。
+*   **本地分类边界**: `Project` 只代表本地组织分类，GoalSifter 的 `KR` 只读展示，不应在本地管理窗口里被改写。
 
 ---
 

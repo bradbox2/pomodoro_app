@@ -14,10 +14,11 @@ class AnalysisManager:
     Generates a sophisticated, multi-tabbed interactive HTML report (Dashboard).
     """
 
-    def __init__(self, data_manager: PomodoroDataManager, base_dir: str):
+    def __init__(self, data_manager: PomodoroDataManager, exports_dir: str, config_path: str | None = None):
         self.data_manager = data_manager
-        self.base_dir = base_dir
-        self.report_path = os.path.join(base_dir, 'pomodoro_dashboard.html')
+        self.exports_dir = str(exports_dir)
+        self.config_path = config_path
+        self.report_path = os.path.join(self.exports_dir, 'pomodoro_dashboard.html')
 
     def generate_and_show_report(self, start_date=None, end_date=None):
         """Fetches data, generates the complete dashboard, and opens it."""
@@ -25,7 +26,7 @@ class AnalysisManager:
         
         # --- Create Unique Report Path with Timestamp ---
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.report_path = os.path.join(self.base_dir, f'pomodoro_dashboard_{timestamp}.html')
+        self.report_path = os.path.join(self.exports_dir, f'pomodoro_dashboard_{timestamp}.html')
         
         # --- DEBUG MESSAGEBOX ---
         # messagebox.showinfo("Debug Info", f"Total Sessions in DB: {len(df)}\nDate Range: {start_date} to {end_date}")
@@ -263,7 +264,7 @@ class AnalysisManager:
         # Reason Category Mapping
         # We need a category map, but AppConfigManager doesn't have it yet.
         # Let's infer it from the structure.
-        config_manager = AppConfigManager()
+        config_manager = AppConfigManager(self.config_path)
         reasons = config_manager.get_interruption_reasons()
         category_map = {}
         
@@ -383,7 +384,7 @@ class AnalysisManager:
 
         # Mood Distribution
         # Use aliases to group moods
-        config_manager = AppConfigManager()
+        config_manager = AppConfigManager(self.config_path)
         moods = config_manager.get_feedback_moods()
         canonical_map = {}
         for mood in moods:
