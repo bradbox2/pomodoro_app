@@ -18,7 +18,7 @@ class GameFocusBar(ctk.CTkCanvas):
         
         # --- 配色方案 (配置字典) ---
         self.colors = {
-            "Light": {
+            "light": {
                 "bg": "#e0e0e0",             # 空槽背景
                 "border": "#bbbbbb",         # 边框
                 "fill_normal": "#007AFF",    # 正常进度 (iOS蓝)
@@ -26,7 +26,7 @@ class GameFocusBar(ctk.CTkCanvas):
                 "text": "#333333",           # 文字颜色
                 "segment": "#ffffff"         # 分隔线颜色
             },
-            "Dark": {
+            "dark": {
                 "bg": "#2b2b2b",             # 空槽背景
                 "border": "#3a3a3a",         # 边框
                 "fill_normal": "#00e5ff",    # 正常进度 (赛博青)
@@ -73,8 +73,15 @@ class GameFocusBar(ctk.CTkCanvas):
 
     def _get_theme_color(self, key):
         """获取当前模式下的颜色"""
-        mode = ctk.get_appearance_mode() # "Light" or "Dark"
-        return self.colors.get(mode, self.colors["Dark"])[key]
+        try:
+            from focusflow.ctk_theme_config import ThemeManager
+            mode = ThemeManager.get_mode() # "light" or "dark" (lowercase)
+        except ImportError:
+            mode = ctk.get_appearance_mode().lower()
+
+        # Fallback if mode not found
+        if mode not in self.colors: mode = "dark"
+        return self.colors[mode][key]
 
     def _draw_hud_shape(self, x1, y1, x2, y2, cut_size=10):
         """生成带斜角的坐标列表 (游戏 HUD 风格)"""
@@ -111,13 +118,16 @@ class GameFocusBar(ctk.CTkCanvas):
         # 背景需要根据当前画布大小自适应 (防止 resize 时变形)
         w, h = self.winfo_width(), self.winfo_height()
         # 如果还没渲染出来(初始化时)，用传入的默认宽高
+        # 如果还没渲染出来(初始化时)，用传入的默认宽高
         if w <= 1: w, h = self.w, self.h
         
-        pad_x, pad_y = 2, 2
-        cut = h // 3 # 斜角大小随高度变化
+        # "Minimize Border": Minimal padding
+        pad_x, pad_y = 1, 1 
+        cut = int(h / 3) # 斜角大小随高度变化
         
         bg_coords = self._draw_hud_shape(pad_x, pad_y, w-pad_x, h-pad_y, cut)
-        self.create_polygon(bg_coords, fill=bg_col, outline=border_col, width=2)
+        # Border width reduced to 1
+        self.create_polygon(bg_coords, fill=bg_col, outline=border_col, width=1)
 
         # 3. 绘制进度条 (填充)
         if self.target_val > 0 and self.display_val > 0:
@@ -126,18 +136,18 @@ class GameFocusBar(ctk.CTkCanvas):
             fill_width = (w - 2 * pad_x) * ratio
             
             # 只有当宽度足够时才绘制
-            if fill_width > 5:
+            if fill_width > 3:
                 # 只有当填充满时，才显示右侧的斜角，否则是垂直边缘
                 if ratio >= 0.99:
-                    fill_coords = self._draw_hud_shape(pad_x+2, pad_y+2, pad_x+fill_width-2, h-pad_y-2, cut)
+                    fill_coords = self._draw_hud_shape(pad_x+1, pad_y+1, pad_x+fill_width-1, h-pad_y-1, cut)
                 else:
                     # 未满时，右边是直的 (带一点倾斜更好看)
-                    slant = 5 # 内部小倾斜
+                    slant = 3 # 内部小倾斜
                     fill_coords = [
-                        pad_x+2, pad_y+2,
-                        pad_x+fill_width, pad_y+2,
-                        pad_x+fill_width-slant, h-pad_y-2,
-                        pad_x+2, h-pad_y-2
+                        pad_x+1, pad_y+1,
+                        pad_x+fill_width, pad_y+1,
+                        pad_x+fill_width-slant, h-pad_y-1,
+                        pad_x+1, h-pad_y-1
                     ]
                 
                 self.create_polygon(fill_coords, fill=fill_col, outline="")
@@ -146,9 +156,9 @@ class GameFocusBar(ctk.CTkCanvas):
                 # 每 10% 画一条细线
                 for i in range(1, 10):
                     seg_x = pad_x + ((w - 2 * pad_x) * (i/10))
-                    if seg_x < (pad_x + fill_width - 5): # 只在填充区域内画
+                    if seg_x < (pad_x + fill_width - 3): # 只在填充区域内画
                         # 稍微倾斜的分隔线
-                        self.create_line(seg_x + 2, pad_y+2, seg_x - 2, h-pad_y-2, fill=seg_col, width=1, stipple="gray50")
+                        self.create_line(seg_x, pad_y+1, seg_x - 1, h-pad_y-1, fill=seg_col, width=1, stipple="gray50")
 
         # 5. 绘制文字信息 (HUD 数据)
         # 尝试加载字体，如果失败使用默认
@@ -160,7 +170,7 @@ class GameFocusBar(ctk.CTkCanvas):
         except:
             pass
             
-        font_style = (font_name, 14)
+        font_style = (font_name, 11) # Reduced font size for smaller bar
         
         if is_overload:
             over_val = int(self.display_val - self.target_val)
@@ -174,90 +184,3 @@ class GameFocusBar(ctk.CTkCanvas):
     def _on_resize(self, event):
         """窗口大小改变时重绘"""
         self.update_view()
-
-
-# ==========================================
-# 2. 测试主程序 (独立运行入口)
-# ==========================================
-class StandaloneTestApp(ctk.CTk):
-    def __init__(self):
-        super().__init__()
-        
-        # 窗口设置
-        self.title("Game Focus Bar - Component Test")
-        self.geometry("600x450")
-        ctk.set_appearance_mode("Dark") # 默认深色
-        
-        # 布局配置
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-        
-        # 主容器
-        self.frame = ctk.CTkFrame(self)
-        self.frame.pack(fill="both", expand=True, padx=20, pady=20)
-        
-        # --- 标题 ---
-        self.lbl_title = ctk.CTkLabel(self.frame, text="POMODORO HUD UI", font=("Arial", 20, "bold"))
-        self.lbl_title.pack(pady=(20, 10))
-        
-        # --- 实例化进度条组件 ---
-        # 目标值设为 60
-        self.hud_bar = GameFocusBar(self.frame, width=500, height=50, target_val=60)
-        self.hud_bar.pack(fill="x", padx=30, pady=20)
-        
-        # --- 控制区域 ---
-        self.ctrl_frame = ctk.CTkFrame(self.frame, fg_color="transparent")
-        self.ctrl_frame.pack(fill="x", padx=30, pady=20)
-        
-        # 滑块说明
-        self.lbl_info = ctk.CTkLabel(self.ctrl_frame, text="Drag to Simulate Progress (Target: 60)")
-        self.lbl_info.pack(pady=5)
-        
-        # 模拟滑块：范围 0 到 100 (故意超过 60 以测试变色)
-        self.slider = ctk.CTkSlider(
-            self.ctrl_frame, 
-            from_=0, 
-            to=100, 
-            number_of_steps=100, 
-            command=self.on_slider_change
-        )
-        self.slider.set(0)
-        self.slider.pack(fill="x", pady=10)
-        
-        # 主题切换按钮
-        self.btn_theme = ctk.CTkButton(
-            self.ctrl_frame, 
-            text="Toggle Light/Dark Mode", 
-            command=self.toggle_theme,
-            height=40
-        )
-        self.btn_theme.pack(pady=20)
-        
-        # 说明文字
-        instructions = (
-            "Test Guide:\n"
-            "1. Drag slider to see smooth animation.\n"
-            "2. Drag past 60 to see 'Red Alert' warning state.\n"
-            "3. Click Toggle Theme to test auto-adaptation.\n"
-            "4. Resize window to test responsiveness."
-        )
-        self.lbl_instr = ctk.CTkLabel(self.frame, text=instructions, text_color="gray", justify="left")
-        self.lbl_instr.pack(side="bottom", pady=20)
-
-    def on_slider_change(self, value):
-        # 将滑块的值传递给进度条
-        self.hud_bar.set_progress(value)
-
-    def toggle_theme(self):
-        # 切换深浅模式
-        current = ctk.get_appearance_mode()
-        new_mode = "Light" if current == "Dark" else "Dark"
-        ctk.set_appearance_mode(new_mode)
-        
-        # 强制重绘组件以应用新颜色
-        # (因为 Canvas 绘图不是原生组件，需要手动触发一次 update)
-        self.hud_bar.update_view()
-
-if __name__ == "__main__":
-    app = StandaloneTestApp()
-    app.mainloop()

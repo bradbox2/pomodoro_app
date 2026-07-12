@@ -1,12 +1,17 @@
 import os
 import sys
 import webbrowser
+from pathlib import Path
 from datetime import datetime, timedelta
-from analysis_manager import AnalysisManager
-from pomodoro_data_manager import PomodoroDataManager
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+
+from focusflow.analysis_manager import AnalysisManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
 
 # Initialize
-base_dir = os.path.dirname(__file__)
+base_dir = str(PROJECT_ROOT)
 data_dir = os.path.join(base_dir, 'data')
 data_manager = PomodoroDataManager(data_dir, 'pomodoro_data.db')
 am = AnalysisManager(data_manager, base_dir)

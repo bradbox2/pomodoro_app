@@ -1,6 +1,6 @@
 import pytest
 
-from ui_manager import parse_focus_estimate
+from focusflow.ui_manager import parse_focus_estimate
 
 
 @pytest.mark.parametrize("raw, expected", [("1", 1), ("4", 4), (" 12 ", 12), ("99", 99)])

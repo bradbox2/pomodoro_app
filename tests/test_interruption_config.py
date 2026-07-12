@@ -1,6 +1,6 @@
 import json
 
-from app_config_manager import AppConfigManager
+from focusflow.app_config_manager import AppConfigManager
 
 
 def test_config_manager_creates_default_at_the_requested_user_path(tmp_path):

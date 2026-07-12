@@ -23,7 +23,7 @@ from datetime import datetime
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "data", "pomodoro_data.db")
+DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "pomodoro_data.db")
 BACKUP_PATH = DB_PATH + f".pre-migrate-{datetime.now().strftime('%Y%m%d_%H%M%S')}.bak"
 
 MAPPING = {

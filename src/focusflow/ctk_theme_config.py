@@ -5,7 +5,7 @@ CustomTkinter 主题配置管理器
 """
 
 import customtkinter as ctk
-from config import BG_COLOR, FG_COLOR, ACCENT_COLOR, BUTTON_COLOR, BUTTON_HOVER, CARD_BG_COLOR
+from focusflow.config import BG_COLOR, FG_COLOR, ACCENT_COLOR, BUTTON_COLOR, BUTTON_HOVER, CARD_BG_COLOR
 
 
 class ThemeManager:

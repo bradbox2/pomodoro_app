@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from pomodoro_data_manager import PomodoroDataManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
 
 
 def test_existing_local_task_is_exposed_as_a_draft_with_progress(tmp_path):

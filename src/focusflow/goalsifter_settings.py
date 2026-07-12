@@ -6,7 +6,7 @@ import json
 import uuid
 from dataclasses import asdict, dataclass
 
-from app_paths import AppPaths
+from focusflow.app_paths import AppPaths
 
 
 @dataclass

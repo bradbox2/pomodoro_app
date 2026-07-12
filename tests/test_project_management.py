@@ -2,7 +2,7 @@ from datetime import datetime
 
 import pytest
 
-from pomodoro_data_manager import PomodoroDataManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
 
 
 def test_rename_project_preserves_tasks_focus_items_and_sessions(tmp_path):

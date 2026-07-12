@@ -1,8 +1,8 @@
 from pathlib import Path
 
-from app_paths import AppPaths
-from app_config_manager import AppConfigManager
-from analysis_manager import AnalysisManager
+from focusflow.app_paths import AppPaths
+from focusflow.app_config_manager import AppConfigManager
+from focusflow.analysis_manager import AnalysisManager
 
 
 def test_environment_data_root_overrides_default(monkeypatch, tmp_path):

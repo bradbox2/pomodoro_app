@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pomodoro_data_manager import PomodoroDataManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
 
 
 def test_bound_completed_work_session_is_queued_once_with_its_session_uuid(tmp_path):

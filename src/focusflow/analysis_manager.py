@@ -6,8 +6,8 @@ import pandas as pd
 from datetime import datetime, timedelta
 import plotly.express as px
 import plotly.graph_objects as go
-from pomodoro_data_manager import PomodoroDataManager
-from app_config_manager import AppConfigManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
+from focusflow.app_config_manager import AppConfigManager
 
 class AnalysisManager:
     """

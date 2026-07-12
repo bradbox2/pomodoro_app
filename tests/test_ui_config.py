@@ -1,8 +1,8 @@
 """
 Test script to verify UI configuration changes
 """
-from config import *
-from ui_manager import calculate_home_size
+from focusflow.config import *
+from focusflow.ui_manager import calculate_home_size
 
 def test_window_size():
     """Home and topmost timer use deliberately different window sizes."""

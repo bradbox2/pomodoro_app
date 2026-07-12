@@ -6,13 +6,13 @@ import tkinter as tk
 import pygame
 import customtkinter as ctk
 from tkinter import StringVar, Menu  # Keep StringVar and Menu from tkinter
-from config import *
-from ctk_theme_config import ThemeManager
+from focusflow.config import *
+from focusflow.ctk_theme_config import ThemeManager
 from datetime import datetime, timedelta
 import math
 
-from visual_effects import BlackHoleEffect, ZenFocusEffect
-from game_progress_bar import GameFocusBar
+from focusflow.visual_effects import BlackHoleEffect, ZenFocusEffect
+from focusflow.game_progress_bar import GameFocusBar
 
 
 def calculate_home_size(requested_width, requested_height, screen_width, screen_height):
@@ -53,7 +53,7 @@ class PygameTimerWidget(tk.Frame):
         except Exception as e: print(f"Embedding setup failed: {e}")
 
         # Subscribe to theme changes
-        from ctk_theme_config import ThemeManager
+        from focusflow.ctk_theme_config import ThemeManager
         ThemeManager.subscribe(self._on_theme_changed)
 
         # 2. Init Pygame
@@ -77,7 +77,7 @@ class PygameTimerWidget(tk.Frame):
 
     def _init_effect(self):
         """Initialize or switch effect based on global theme"""
-        from ctk_theme_config import ThemeManager
+        from focusflow.ctk_theme_config import ThemeManager
         current_mode = ThemeManager.get_mode()
         current_bg = ThemeManager.get_color("bg")
         
@@ -107,7 +107,7 @@ class PygameTimerWidget(tk.Frame):
     
     def _on_theme_changed(self):
         """Called when theme toggles"""
-        from ctk_theme_config import ThemeManager
+        from focusflow.ctk_theme_config import ThemeManager
         new_bg = ThemeManager.get_color("bg")
         self.set_background_color(new_bg)
         

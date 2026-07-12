@@ -9,7 +9,7 @@ from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from goalsifter_settings import GoalSifterSettings
+from focusflow.goalsifter_settings import GoalSifterSettings
 
 
 class GoalSifterRemoteError(RuntimeError):

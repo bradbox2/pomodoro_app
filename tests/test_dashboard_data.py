@@ -1,7 +1,7 @@
 import os
 import sys
 import pandas as pd
-from pomodoro_data_manager import PomodoroDataManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
 
 # Initialize data manager
 data_dir = os.path.join(os.path.dirname(__file__), 'data')

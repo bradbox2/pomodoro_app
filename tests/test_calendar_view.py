@@ -6,7 +6,7 @@ import os
 import sys
 import pandas as pd
 from datetime import datetime, timedelta
-from pomodoro_data_manager import PomodoroDataManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
 
 def test_calendar_data():
     """Test if calendar view has data to display."""

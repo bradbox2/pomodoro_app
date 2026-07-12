@@ -12,6 +12,12 @@ envi/
 envipomo/
 envi-*/
 
+# Test / tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+test_smart_config/
+
 # Data & Database (exclude large data and logs)
 data/*.bak*
 data/*.log
@@ -38,6 +44,8 @@ sound/music/
 build/
 dist/
 *.spec
+# ...but keep the hand-maintained PyInstaller recipe
+!FocusFlow.spec
 
 # Environment / Secrets
 .env
@@ -50,3 +58,4 @@ dist/
 Thumbs.db
 .DS_Store
 %USERP~1/
+%USERPROFILE%/

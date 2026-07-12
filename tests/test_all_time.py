@@ -1,7 +1,7 @@
 import os
 import sys
-from analysis_manager import AnalysisManager
-from pomodoro_data_manager import PomodoroDataManager
+from focusflow.analysis_manager import AnalysisManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
 
 # Initialize
 base_dir = os.path.dirname(__file__)

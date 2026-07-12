@@ -2,7 +2,7 @@
 import os
 import tkinter as tk
 from tkinter import ttk, Toplevel, PhotoImage
-from config import BG_COLOR, FG_COLOR
+from focusflow.config import BG_COLOR, FG_COLOR
 
 class FeedbackWindow(Toplevel):
     """A pop-up window to gather user feedback after a session."""
@@ -51,7 +51,7 @@ class FeedbackWindow(Toplevel):
         mood_frame.pack(pady=5)
         
         # Load moods from config
-        from app_config_manager import AppConfigManager
+        from focusflow.app_config_manager import AppConfigManager
         config_manager = AppConfigManager()
         moods = config_manager.get_feedback_moods()
         

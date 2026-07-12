@@ -1,7 +1,7 @@
 import json
 
-from goalsifter_client import GoalSifterClient, GoalSifterRemoteError
-from goalsifter_settings import GoalSifterSettings
+from focusflow.goalsifter_client import GoalSifterClient, GoalSifterRemoteError
+from focusflow.goalsifter_settings import GoalSifterSettings
 
 
 def _configured_settings():

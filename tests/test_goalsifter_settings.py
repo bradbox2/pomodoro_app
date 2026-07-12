@@ -1,8 +1,8 @@
 import json
 import uuid
 
-from app_paths import AppPaths
-from goalsifter_settings import GoalSifterSettings
+from focusflow.app_paths import AppPaths
+from focusflow.goalsifter_settings import GoalSifterSettings
 
 
 def test_settings_are_created_in_user_data_with_a_stable_device_id(tmp_path):

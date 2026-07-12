@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 
-from app_paths import AppPaths
+from focusflow.app_paths import AppPaths
 
 class AppConfigManager:
     CONFIG_FILE = "config.json"
@@ -33,10 +33,12 @@ class AppConfigManager:
 
     def __init__(self, config_path=None):
         import uuid
-        from config_history_manager import ConfigHistoryManager
+        from focusflow.config_history_manager import ConfigHistoryManager
         
         if config_path is None:
-            install_dir = Path(__file__).resolve().parent
+            # Project root (this module lives at <root>/src/focusflow/) is the
+            # source for one-time migration of legacy config.json / data/.
+            install_dir = Path(__file__).resolve().parents[2]
             paths = AppPaths.from_environment(install_dir)
             paths.ensure_ready()
             config_path = paths.config_path

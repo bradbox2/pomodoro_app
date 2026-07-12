@@ -13,25 +13,29 @@ from datetime import datetime
 import re
 from typing import Optional
 
-from config import *
-from ctk_theme_config import ThemeManager
-from app_paths import AppPaths
-from pomodoro_timer import PomodoroTimer
-from pomodoro_data_manager import PomodoroDataManager
-from sound_manager import SoundManager
-from ui_manager import UIManager, DateRangeDialog
-from analysis_manager import AnalysisManager
-from feedback_window import FeedbackWindow
-from interruption_window import InterruptionWindow
-from goalsifter_client import GoalSifterClient, GoalSifterRemoteError
-from goalsifter_settings import GoalSifterSettings
+from focusflow.config import *
+from focusflow.ctk_theme_config import ThemeManager
+from focusflow.app_paths import AppPaths
+from focusflow.pomodoro_timer import PomodoroTimer
+from focusflow.pomodoro_data_manager import PomodoroDataManager
+from focusflow.sound_manager import SoundManager
+from focusflow.ui_manager import UIManager, DateRangeDialog
+from focusflow.analysis_manager import AnalysisManager
+from focusflow.feedback_window import FeedbackWindow
+from focusflow.interruption_window import InterruptionWindow
+from focusflow.goalsifter_client import GoalSifterClient, GoalSifterRemoteError
+from focusflow.goalsifter_settings import GoalSifterSettings
 
 def get_base_path():
-    """Gets the base path, ensuring it works for both script and PyInstaller-packaged exe."""
+    """Project root holding bundled assets (images/, sound/) and legacy data.
+
+    Works both from a source checkout (this module lives at
+    <root>/src/focusflow/main.py, so the root is two parents up) and from a
+    PyInstaller one-folder build (assets sit next to the executable).
+    """
     if getattr(sys, 'frozen', False):
         return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
+    return str(Path(__file__).resolve().parents[2])
 
 class PomodoroApp:
     """
@@ -626,7 +630,7 @@ class PomodoroApp:
         self.ui.toggle_secondary_button(is_running=True)
         self.ui.show_timer_view()
         
-        from ctk_theme_config import ThemeManager
+        from focusflow.ctk_theme_config import ThemeManager
         pygame_bg = ThemeManager.get_color("bg")
         if hasattr(self.ui, 'pygame_widget'):
             self.ui.pygame_widget.set_background_color(pygame_bg)
@@ -792,7 +796,12 @@ class PomodoroApp:
             self.update_db_status()
             self._setup_next_work_session()
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point: create the root window and run the application."""
     window = ctk.CTk()
-    app = PomodoroApp(window)
+    PomodoroApp(window)
     window.mainloop()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,8 +1,8 @@
 # interruption_window.py
 import tkinter as tk
 from tkinter import ttk, Toplevel
-from config import BG_COLOR
-from app_config_manager import AppConfigManager
+from focusflow.config import BG_COLOR
+from focusflow.app_config_manager import AppConfigManager
 
 class InterruptionWindow(Toplevel):
     """A pop-up window for selecting the reason for a session interruption."""

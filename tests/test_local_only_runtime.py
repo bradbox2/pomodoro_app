@@ -2,7 +2,7 @@ import inspect
 import sys
 from datetime import datetime
 
-from pomodoro_data_manager import PomodoroDataManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
 
 
 def test_recording_a_session_never_loads_or_calls_a_sync_module(tmp_path):

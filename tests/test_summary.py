@@ -2,8 +2,8 @@
 Test if the calendar is being generated in the actual dashboard flow.
 """
 import os
-from pomodoro_data_manager import PomodoroDataManager
-from analysis_manager import AnalysisManager
+from focusflow.pomodoro_data_manager import PomodoroDataManager
+from focusflow.analysis_manager import AnalysisManager
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 data_dir = os.path.join(base_dir, "data")

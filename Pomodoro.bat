@@ -1,16 +1,16 @@
 @echo off
 setlocal
 REM ==========================================
-REM FocusFlow Launcher (Universal Version)
+REM FocusFlow Launcher
 REM ==========================================
 
-REM Get the script directory
+REM Resolve the project root (this script's directory)
 set "PROJECT_PATH=%~dp0"
 cd /d "%PROJECT_PATH%"
 
-REM Check main.py
-if not exist "main.py" (
-    echo [ERROR] Incorrect path, main.py not found.
+REM Check the application package
+if not exist "src\focusflow\main.py" (
+    echo [ERROR] src\focusflow\main.py not found. Run this from the project root.
     pause
     exit /b
 )
@@ -23,7 +23,8 @@ if not exist ".venv\Scripts\pythonw.exe" (
     exit /b
 )
 
+set "PYTHONPATH=%PROJECT_PATH%src"
 echo Starting FocusFlow...
-start "Pomodoro" ".venv\Scripts\pythonw.exe" "main.py"
+start "FocusFlow" ".venv\Scripts\pythonw.exe" -m focusflow
 
 exit

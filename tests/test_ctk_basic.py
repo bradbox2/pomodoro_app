@@ -4,8 +4,8 @@ Quick test to verify CustomTkinter setup before全面迁移
 """
 
 import customtkinter as ctk
-from ctk_theme_config import ThemeManager
-from config import *
+from focusflow.ctk_theme_config import ThemeManager
+from focusflow.config import *
 
 #初始化主题
 ThemeManager.initialize("dark")
