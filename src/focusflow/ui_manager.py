@@ -260,6 +260,7 @@ class UIManager:
                  goalsifter_sync_callback,
                  goalsifter_bind_callback,
                  goalsifter_create_callback,
+                 goalsifter_settings_callback,
                  local_manage_callback,
                  image_dir, all_projects: list, sound_manager=None):
         self.root = root
@@ -279,6 +280,7 @@ class UIManager:
         self.goalsifter_sync_callback = goalsifter_sync_callback
         self.goalsifter_bind_callback = goalsifter_bind_callback
         self.goalsifter_create_callback = goalsifter_create_callback
+        self.goalsifter_settings_callback = goalsifter_settings_callback
         self.local_manage_callback = local_manage_callback
         self.image_dir = image_dir
         self.all_projects = all_projects
@@ -529,6 +531,10 @@ class UIManager:
             self.goalsifter_focus_list, text="手动同步 Outbox", height=28,
             command=self.goalsifter_sync_callback,
         ).pack(anchor="w", pady=(0, 8))
+        ctk.CTkButton(
+            self.goalsifter_focus_list, text="⚙ 连接设置", height=28,
+            command=self.goalsifter_settings_callback,
+        ).pack(anchor="w", pady=(0, 8))
         
         # Project section
         ctk.CTkLabel(editor_tab, text="本地分类（可选）:",
@@ -743,6 +749,10 @@ class UIManager:
         ctk.CTkButton(
             self.goalsifter_focus_list, text="手动同步 Outbox", height=28,
             command=self.goalsifter_sync_callback,
+        ).pack(anchor="w", pady=(0, 8))
+        ctk.CTkButton(
+            self.goalsifter_focus_list, text="⚙ 连接设置", height=28,
+            command=self.goalsifter_settings_callback,
         ).pack(anchor="w", pady=(0, 8))
         if not items:
             ctk.CTkLabel(self.goalsifter_focus_list, text="没有可选的活跃 DW。", font=(FONT_NAME, 11)).pack(pady=12)

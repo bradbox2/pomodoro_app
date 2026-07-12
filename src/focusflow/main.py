@@ -8,7 +8,7 @@ import logging
 import sqlite3
 from pathlib import Path
 import customtkinter as ctk
-from tkinter import messagebox, filedialog, simpledialog  # Keep these for dialogs
+from tkinter import messagebox, filedialog, simpledialog, StringVar, BooleanVar  # Keep these for dialogs
 from datetime import datetime
 import re
 from typing import Optional
@@ -109,6 +109,7 @@ class PomodoroApp:
             self.sync_goalsifter_outbox,
             self.bind_current_focus_item,
             self.create_and_bind_current_focus_item,
+            self.open_goalsifter_settings,
             self.show_local_task_manager,
             self.image_dir,
             all_projects,
@@ -126,6 +127,8 @@ class PomodoroApp:
         # --- Init ---
         self.setup_window_properties()
         self.reset_state_and_ui()
+        # Optionally connect to GoalSifter on startup (never blocks local timing).
+        self.root.after(900, self._maybe_auto_connect_goalsifter)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.root.bind("<<ProjectSelected>>", self.on_project_selected)
         self.root.bind("<<TaskSelected>>", self.on_task_selected)
@@ -366,6 +369,91 @@ class PomodoroApp:
         self.current_task = item["task_name"]
         self.current_task_estimate = item["estimate"]
         self.current_focus_source = item.get("source", "local")
+
+    def _maybe_auto_connect_goalsifter(self) -> None:
+        """Refresh GoalSifter tasks at startup when the user opted into auto-connect."""
+        if self.goalsifter_settings.auto_connect and self.goalsifter_settings.is_configured:
+            self.refresh_goalsifter_tasks()
+
+    def open_goalsifter_settings(self) -> None:
+        """Edit and persist the GoalSifter connection without hand-editing JSON."""
+        s = self.goalsifter_settings
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("GoalSifter 连接设置")
+        dialog.geometry("440x380")
+        dialog.transient(self.root)
+        try:
+            dialog.grab_set()
+        except Exception:
+            pass
+
+        head = {"padx": 16, "pady": (10, 0)}
+        ctk.CTkLabel(dialog, text="SSH Host 别名（在 ~/.ssh/config 中定义）",
+                     anchor="w").pack(fill="x", **head)
+        alias_var = StringVar(value=s.ssh_host_alias)
+        ctk.CTkEntry(dialog, textvariable=alias_var).pack(fill="x", padx=16)
+
+        ctk.CTkLabel(dialog, text="Bearer Token", anchor="w").pack(fill="x", **head)
+        token_var = StringVar(value=s.bearer_token)
+        token_entry = ctk.CTkEntry(dialog, textvariable=token_var, show="*")
+        token_entry.pack(fill="x", padx=16)
+        show_var = BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            dialog, text="显示 Token", variable=show_var,
+            command=lambda: token_entry.configure(show="" if show_var.get() else "*"),
+        ).pack(anchor="w", padx=16, pady=(4, 0))
+
+        ctk.CTkLabel(dialog, text="本地端口", anchor="w").pack(fill="x", **head)
+        port_var = StringVar(value=str(s.local_port))
+        ctk.CTkEntry(dialog, textvariable=port_var, width=120).pack(anchor="w", padx=16)
+
+        auto_var = BooleanVar(value=s.auto_connect)
+        ctk.CTkCheckBox(dialog, text="启动时自动连接并刷新 GoalSifter 任务",
+                        variable=auto_var).pack(anchor="w", padx=16, pady=(12, 0))
+
+        status = ctk.CTkLabel(dialog, text="", anchor="w", justify="left",
+                              font=(FONT_NAME, 11), wraplength=400)
+        status.pack(fill="x", padx=16, pady=(8, 0))
+
+        def _apply() -> bool:
+            try:
+                port = int(port_var.get().strip())
+                if not (1 <= port <= 65535):
+                    raise ValueError
+            except ValueError:
+                status.configure(text="端口必须是 1–65535 之间的整数。")
+                return False
+            s.update_connection(
+                self.paths,
+                ssh_host_alias=alias_var.get(),
+                bearer_token=token_var.get(),
+                local_port=port,
+                auto_connect=auto_var.get(),
+            )
+            # A changed alias/port invalidates any live tunnel; drop it so the
+            # next connect re-establishes with the new settings.
+            if self.goalsifter_tunnel is not None:
+                try:
+                    self.goalsifter_tunnel.terminate()
+                except Exception:
+                    pass
+                self.goalsifter_tunnel = None
+            return True
+
+        def _save() -> None:
+            if _apply():
+                dialog.destroy()
+
+        def _save_and_test() -> None:
+            if _apply():
+                dialog.destroy()
+                self.refresh_goalsifter_tasks()
+
+        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+        buttons.pack(fill="x", padx=16, pady=16, side="bottom")
+        ctk.CTkButton(buttons, text="保存", width=90, command=_save).pack(side="right")
+        ctk.CTkButton(buttons, text="保存并测试连接", width=150,
+                      command=_save_and_test).pack(side="right", padx=(0, 8))
 
     def refresh_goalsifter_tasks(self) -> None:
         """Fetch active DWs only after an explicit user refresh request."""

@@ -61,12 +61,14 @@ FocusFlow 本机配置中显式更新它。
 **契约事实（不再变更）：**
 
 - **端点**：
-  - `GET /api/v1/focusflow/tasks` — 只读活跃 `dw` 快照；每项含 `task_id`、`task_name`、`kr_ref`、`pomo_estimate`、`pomo_count`、`status`、`created_at`、`last_event_at`。契约不含 `updated_at`；新鲜度以 `last_event_at` 判断。
+  - `GET /api/v1/focusflow/tasks` — 只读活跃 `dw` 快照。响应为 `{"tasks":[...]}` 信封（客户端解包后取列表，见 2026-07-13 实机联通说明）；每项含 `task_id`、`task_name`、`kr_ref`、`pomo_estimate`、`pomo_count`、`status`、`created_at`、`last_event_at`。契约不含 `updated_at`；新鲜度以 `last_event_at` 判断。
   - `POST /api/v1/focusflow/pomo-events` — 事件字段：`event_id`、`device_id`、`task_id`、`started_at`、`ended_at`、`duration_minutes`、`status`（当前仅接受 `"completed"`）。响应：`{event_id, duplicate, task_id, pomo_count, exp_awarded}`；同一 `event_id` 重放返回 200 + `duplicate: true` + 当前 `pomo_count`，不重复计分。
   - `POST /api/v1/focusflow/tasks` — 显式创建 DW：`{name, pomo_estimate?}`。评级由服务端规则决定，请求不携带 filters/rating；任务名未通过服务端校验 → 422，客户端须提示用户回 GoalSifter（飞书/TTC）完成澄清后再绑定，不得在桌面端旁路。
 - **认证**：每个请求带 `Authorization: Bearer <token>`；缺失/错误 → 401。
 - **拒绝与重试语义**：`ph` 任务、不存在的 task_id、非活跃任务 → 422。凡未收到 `duplicate: true` 成功响应的事件，客户端可用**同一 `event_id`** 安全重试，服务端保证不重复计分。
 - **网络边界**：公网侧对 `/api/v1/focusflow/` 一律 403；该前缀只能经 SSH 隧道访问，与本路线图的架构原则一致。
+
+**桌面契约已实机联通（2026-07-13）：** SSH 只读核实确认服务端已部署（`uvicorn api_server:app` 监听 VPS `127.0.0.1:8000`，`GET /tasks` 无 token → 401、带 Bearer → 200）。客户端已配置（`ssh_host_alias=openclaw`、token 只存本机）并端到端拉到真实活跃 DW。落地两点客户端适配：(1) `get_active_dw_tasks()` 解包服务端的 `{"tasks":[...]}` 信封（原先只认裸列表）；(2) 新增应用内"⚙ 连接设置"对话框（别名 / token 掩码 / 端口 / 启动自动连接），免除手改 JSON。**不变量不受影响：** 远端 DW 仍镜像进隐藏合成项目 `__goalsifter__:<task_id>`，`kr_ref` 仅作只读 `context_label`，跨系统关联只用 `task_id`；KR 不映射为本地 Project、GoalSifter KR 始终只读。
 
 **客户端计分口径（契约层语义，2026-07-12 定稿）：**
 

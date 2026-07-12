@@ -33,6 +33,31 @@ def test_task_snapshot_uses_localhost_contract_and_bearer_token():
     )]
 
 
+def test_task_snapshot_accepts_server_tasks_envelope():
+    # The deployed GoalSifter server wraps the snapshot as {"tasks": [...]}.
+    def request(_method, _url, _headers, _body=None):
+        return 200, json.dumps({"tasks": [{
+            "task_id": "dw-2", "task_name": "确定IB开发方向", "kr_ref": None,
+            "pomo_estimate": 3, "pomo_count": 0, "status": "活跃",
+            "created_at": "2026-07-12T01:04:43", "last_event_at": "2026-07-12 09:04:43",
+        }]}).encode()
+
+    tasks = GoalSifterClient(_configured_settings(), request=request).get_active_dw_tasks()
+
+    assert len(tasks) == 1
+    assert tasks[0].task_id == "dw-2"
+    assert tasks[0].status == "活跃"
+
+
+def test_empty_tasks_envelope_yields_no_tasks():
+    def request(_method, _url, _headers, _body=None):
+        return 200, json.dumps({"tasks": []}).encode()
+
+    tasks = GoalSifterClient(_configured_settings(), request=request).get_active_dw_tasks()
+
+    assert tasks == []
+
+
 def test_duplicate_event_is_a_successful_idempotent_response():
     def request(_method, _url, _headers, _body=None):
         return 200, json.dumps({

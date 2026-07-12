@@ -51,6 +51,10 @@ class GoalSifterClient:
     def get_active_dw_tasks(self) -> list[GoalSifterTask]:
         status, body = self._request("GET", f"{self.base_url}/tasks", self._headers())
         data = self._decode(status, body)
+        # The deployed server returns the snapshot wrapped as {"tasks": [...]};
+        # tolerate a bare list too (older responses / test fixtures).
+        if isinstance(data, dict):
+            data = data.get("tasks", [])
         if not isinstance(data, list):
             raise GoalSifterRemoteError(500, "GoalSifter task snapshot is not a list")
         return [GoalSifterTask(**task) for task in data]
