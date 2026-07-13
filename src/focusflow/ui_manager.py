@@ -261,6 +261,7 @@ class UIManager:
                  goalsifter_bind_callback,
                  goalsifter_create_callback,
                  goalsifter_settings_callback,
+                 goalsifter_complete_callback,
                  local_manage_callback,
                  image_dir, all_projects: list, sound_manager=None):
         self.root = root
@@ -281,6 +282,7 @@ class UIManager:
         self.goalsifter_bind_callback = goalsifter_bind_callback
         self.goalsifter_create_callback = goalsifter_create_callback
         self.goalsifter_settings_callback = goalsifter_settings_callback
+        self.goalsifter_complete_callback = goalsifter_complete_callback
         self.local_manage_callback = local_manage_callback
         self.image_dir = image_dir
         self.all_projects = all_projects
@@ -760,10 +762,16 @@ class UIManager:
         for item in items:
             context = item.get("context_label") or "未关联 KR"
             text = f'{item["task_name"]}\nKR：{context}  ·  {item["completed_count"]}/{item["estimate"]}  ·  已绑定 DW'
+            row = ctk.CTkFrame(self.goalsifter_focus_list, fg_color="transparent")
+            row.pack(fill="x", pady=3)
             ctk.CTkButton(
-                self.goalsifter_focus_list, text=text, anchor="w", height=52,
+                row, text=text, anchor="w", height=52,
                 command=lambda value=item: self.focus_item_select_callback(value),
-            ).pack(fill="x", pady=3)
+            ).pack(side="left", fill="x", expand=True)
+            ctk.CTkButton(
+                row, text="完成", width=60, height=52,
+                command=lambda value=item: self.goalsifter_complete_callback(value),
+            ).pack(side="right", padx=(5, 0))
     
     def update_timer_display(self, time_str):
         if hasattr(self, 'pygame_widget'):

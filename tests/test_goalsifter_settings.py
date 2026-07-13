@@ -67,3 +67,32 @@ def test_update_connection_persists_port_as_int(tmp_path):
     stored = json.loads(paths.goalsifter_settings_path.read_text(encoding="utf-8"))
     assert stored["local_port"] == 18022
     assert stored["auto_connect"] is False
+
+
+def test_copied_settings_rotate_device_id_when_machine_marker_changes(tmp_path):
+    paths = AppPaths(install_dir=tmp_path / "install", data_dir=tmp_path / "FocusFlow")
+    settings = GoalSifterSettings.load(paths)
+    original_id = settings.device_id
+    settings.machine_marker = "machine-a"
+    settings.save(paths)
+
+    reloaded = GoalSifterSettings.load(paths, machine_marker="machine-b")
+
+    assert reloaded.device_id != original_id
+    assert reloaded.machine_marker == "machine-b"
+
+
+def test_malformed_local_port_does_not_crash_startup(tmp_path):
+    paths = AppPaths(install_dir=tmp_path / "install", data_dir=tmp_path / "FocusFlow")
+    paths.ensure_ready()
+    paths.goalsifter_settings_path.write_text(json.dumps({
+        "device_id": str(uuid.uuid4()),
+        "ssh_host_alias": "goalsifter",
+        "local_port": "not-a-port",
+        "bearer_token": "token",
+    }), encoding="utf-8")
+
+    settings = GoalSifterSettings.load(paths)
+
+    assert settings.local_port == 18000
+    assert settings.is_configured is True
