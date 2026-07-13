@@ -6,6 +6,8 @@ import random
 import filecmp
 import logging
 import sqlite3
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import customtkinter as ctk
 from tkinter import messagebox, filedialog, simpledialog, StringVar, BooleanVar  # Keep these for dialogs
@@ -50,6 +52,7 @@ class PomodoroApp:
             root: The main CustomTkinter window.
         """
         self.root = root
+        self.root.report_callback_exception = self._report_callback_exception
         
         # --- Initialize Theme System ---
         ThemeManager.initialize(DEFAULT_THEME_MODE)
@@ -82,6 +85,10 @@ class PomodoroApp:
         self.goalsifter_settings = GoalSifterSettings.load(self.paths)
         self.goalsifter_client = GoalSifterClient(self.goalsifter_settings)
         self.goalsifter_tunnel = None
+        self._goalsifter_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="focusflow-gs")
+        self._goalsifter_sync_in_flight = False
+        self._goalsifter_retry_delay = 1
+        self._goalsifter_retry_job = None
         
         # 1. SoundManager (含事件系统)
         self.sound_manager = SoundManager(self.sound_dir) 
@@ -110,6 +117,7 @@ class PomodoroApp:
             self.bind_current_focus_item,
             self.create_and_bind_current_focus_item,
             self.open_goalsifter_settings,
+            self.complete_goalsifter_focus_item,
             self.show_local_task_manager,
             self.image_dir,
             all_projects,
@@ -123,6 +131,9 @@ class PomodoroApp:
         self.current_task = ""
         self.current_task_estimate = 1
         self.current_focus_source = "local"
+        self.current_goalsifter_task_id = None
+        self._goalsifter_refresh_in_flight = False
+        self._goalsifter_focus_refresh_job = None
 
         # --- Init ---
         self.setup_window_properties()
@@ -132,6 +143,9 @@ class PomodoroApp:
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         self.root.bind("<<ProjectSelected>>", self.on_project_selected)
         self.root.bind("<<TaskSelected>>", self.on_task_selected)
+        self.root.bind("<FocusIn>", self._on_goalsifter_window_focus)
+        self.root.bind("<Visibility>", self._on_goalsifter_window_focus)
+        self._schedule_goalsifter_periodic_refresh()
 
         # === 【新增】启动事件监听循环 ===
         self.check_pygame_events()
@@ -139,6 +153,14 @@ class PomodoroApp:
         # --- Runtime Session Tracking ---
         # Stores session counts for the current runtime: {(project_name, task_name): count}
         self.local_session_counts = {}
+
+    @staticmethod
+    def _report_callback_exception(exc_type, exc_value, exc_traceback) -> None:
+        """Keep one bad Tk callback from terminating the whole desktop app."""
+        logging.error(
+            "Unhandled FocusFlow callback exception",
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
 
     def check_pygame_events(self) -> None:
         """
@@ -324,9 +346,12 @@ class PomodoroApp:
         """Marks the current task as completed in the database."""
         if not self.current_task: return
         if messagebox.askyesno("Confirm", f"Mark '{self.current_task}' as complete?"):
-            if self.is_running: self.abort_session(is_completing=True)
-            else: self.data_manager.mark_task_as_complete(self.current_project, self.current_task)
-            self.reset_state_and_ui()
+            if self.current_focus_source == "goalsifter":
+                self._complete_current_goalsifter_task()
+            else:
+                if self.is_running: self.abort_session(is_completing=True)
+                else: self.data_manager.mark_task_as_complete(self.current_project, self.current_task)
+                self.reset_state_and_ui()
 
     def on_project_selected(self, event=None) -> None:
         """Callback when a project is selected; refreshes task list."""
@@ -369,11 +394,85 @@ class PomodoroApp:
         self.current_task = item["task_name"]
         self.current_task_estimate = item["estimate"]
         self.current_focus_source = item.get("source", "local")
+        self.current_goalsifter_task_id = (
+            item.get("goalsifter_task_id") if self.current_focus_source == "goalsifter" else None
+        )
+
+    def complete_goalsifter_focus_item(self, item: dict) -> None:
+        """Select a remote DW card and ask for explicit completion."""
+        self.select_local_focus_item(item)
+        self.mark_current_task_complete()
+
+    def _complete_current_goalsifter_task(self) -> None:
+        task_id = self.current_goalsifter_task_id
+        if not task_id:
+            messagebox.showerror("完成失败", "当前 GoalSifter DW 缺少 task_id。")
+            return
+        if self.is_running:
+            self.abort_session(is_completing=True)
+        try:
+            self.goalsifter_client.complete_dw_task(task_id)
+        except GoalSifterRemoteError as error:
+            messagebox.showerror("完成失败", f"GoalSifter 拒绝完成该 DW：{error}")
+            return
+        self.refresh_goalsifter_tasks()
+        self.reset_state_and_ui()
+
+    def _on_goalsifter_window_focus(self, _event=None) -> None:
+        """Refresh remote DW state when the app returns to the foreground."""
+        if _event is not None and getattr(_event, "widget", self.root) is not self.root:
+            return
+        if not self.goalsifter_settings.is_configured:
+            return
+        if self._goalsifter_focus_refresh_job is not None:
+            try:
+                self.root.after_cancel(self._goalsifter_focus_refresh_job)
+            except Exception:
+                pass
+        self._goalsifter_focus_refresh_job = self.root.after(
+            250, self._run_debounced_goalsifter_focus_refresh
+        )
+
+    def _run_debounced_goalsifter_focus_refresh(self) -> None:
+        self._goalsifter_focus_refresh_job = None
+        self.refresh_goalsifter_tasks()
+
+    def _schedule_goalsifter_periodic_refresh(self) -> None:
+        self.root.after(30000, self._run_goalsifter_periodic_refresh)
+
+    def _run_goalsifter_periodic_refresh(self) -> None:
+        if self.goalsifter_settings.is_configured:
+            self.refresh_goalsifter_tasks()
+        self._schedule_goalsifter_periodic_refresh()
 
     def _maybe_auto_connect_goalsifter(self) -> None:
-        """Refresh GoalSifter tasks at startup when the user opted into auto-connect."""
-        if self.goalsifter_settings.auto_connect and self.goalsifter_settings.is_configured:
-            self.refresh_goalsifter_tasks()
+        """Refresh tasks after local startup without starting Outbox network work."""
+        if self.goalsifter_settings.is_configured:
+            if self.goalsifter_settings.auto_connect:
+                self.refresh_goalsifter_tasks()
+
+    def _submit_goalsifter_operation(self, operation, on_success, on_failure) -> None:
+        """Run one remote operation off the Tk thread and marshal its result back."""
+        def run() -> None:
+            try:
+                if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
+                    self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
+                for _ in range(20):
+                    if self.goalsifter_client.is_tunnel_ready():
+                        result = operation()
+                        self.root.after(0, lambda: on_success(result))
+                        return
+                    if self.goalsifter_tunnel.poll() is not None:
+                        break
+                    time.sleep(0.25)
+                raise GoalSifterRemoteError(0, "GoalSifter 隧道连接超时")
+            except Exception as error:
+                self.root.after(0, lambda: on_failure(error))
+
+        try:
+            self._goalsifter_executor.submit(run)
+        except Exception as error:
+            on_failure(error)
 
     def open_goalsifter_settings(self) -> None:
         """Edit and persist the GoalSifter connection without hand-editing JSON."""
@@ -476,41 +575,63 @@ class PomodoroApp:
 
     def refresh_goalsifter_tasks(self) -> None:
         """Fetch active DWs only after an explicit user refresh request."""
+        if getattr(self, '_goalsifter_refresh_in_flight', False):
+            return
         if not self.goalsifter_settings.is_configured:
             self.ui.refresh_goalsifter_focus_items(
                 [], "GoalSifter 尚未配置 SSH alias 与 Bearer token。"
             )
             return
+        self._goalsifter_refresh_in_flight = True
 
-        def on_timeout(message: str) -> None:
-            self.ui.refresh_goalsifter_focus_items([], f"GoalSifter 不可用：{message}")
-
-        try:
-            if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
-                self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
-                self.ui.refresh_goalsifter_focus_items([], "正在连接 GoalSifter…")
-            self._await_goalsifter_ready(self._load_goalsifter_tasks, on_timeout)
-        except (GoalSifterRemoteError, OSError) as error:
+        def on_error(error: Exception) -> None:
+            self._goalsifter_refresh_in_flight = False
             self.ui.refresh_goalsifter_focus_items([], f"GoalSifter 不可用：{error}")
 
-    def _load_goalsifter_tasks(self) -> None:
         try:
-            for task in self.goalsifter_client.get_active_dw_tasks():
+            cached_items = self.data_manager.get_goalsifter_focus_items()
+        except Exception as error:
+            self._goalsifter_refresh_in_flight = False
+            self.ui.refresh_goalsifter_focus_items([], f"GoalSifter 不可用：{error}")
+            return
+        self.ui.refresh_goalsifter_focus_items(cached_items, "正在连接 GoalSifter…")
+        self._submit_goalsifter_operation(
+            self.goalsifter_client.get_active_dw_tasks,
+            self._load_goalsifter_tasks,
+            on_error,
+        )
+
+    def _load_goalsifter_tasks(self, tasks=None) -> None:
+        try:
+            if tasks is None:
+                tasks = self.goalsifter_client.get_active_dw_tasks()
+            self.data_manager.reconcile_goalsifter_focus_items({task.task_id for task in tasks})
+            for task in tasks:
                 self.data_manager.upsert_goalsifter_focus_item(task.__dict__)
             self.ui.refresh_goalsifter_focus_items(
                 self.data_manager.get_goalsifter_focus_items(), "已加载活跃 DW。"
             )
             self.update_db_status()
-        except GoalSifterRemoteError as error:
+            self._goalsifter_refresh_in_flight = False
+        except Exception as error:
+            self._goalsifter_refresh_in_flight = False
             self.ui.refresh_goalsifter_focus_items([], f"GoalSifter 不可用：{error}")
 
     def sync_goalsifter_outbox(self) -> None:
-        """Upload queued immutable events only after the user presses sync."""
+        """Upload queued immutable events with durable retry semantics."""
+        if getattr(self, '_goalsifter_sync_in_flight', False):
+            return
         if not self.goalsifter_settings.is_configured:
             self.ui.refresh_goalsifter_focus_items([], "GoalSifter 尚未配置 SSH alias 与 Bearer token。")
             return
+        if not self.data_manager.get_pending_focusflow_events():
+            return
+        self._goalsifter_sync_in_flight = True
+
         def on_timeout(message: str) -> None:
+            self._goalsifter_sync_in_flight = False
             self.ui.refresh_goalsifter_focus_items([], f"无法同步 Outbox：{message}")
+            self._schedule_goalsifter_retry()
 
         try:
             if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
@@ -518,7 +639,23 @@ class PomodoroApp:
                 self.ui.refresh_goalsifter_focus_items([], "正在连接 GoalSifter 并同步 Outbox…")
             self._await_goalsifter_ready(self._sync_pending_goalsifter_events, on_timeout)
         except (GoalSifterRemoteError, OSError) as error:
+            self._goalsifter_sync_in_flight = False
             self.ui.refresh_goalsifter_focus_items([], f"无法同步 Outbox：{error}")
+            self._schedule_goalsifter_retry()
+
+    def _schedule_goalsifter_retry(self) -> None:
+        """Retry transient delivery failures without blocking the Tk event loop."""
+        if getattr(self, '_goalsifter_retry_job', None) is not None:
+            return
+        delay = getattr(self, '_goalsifter_retry_delay', 1)
+        self._goalsifter_retry_delay = min(delay * 2, 60)
+        self._goalsifter_retry_job = self.root.after(
+            delay * 1000, self._run_goalsifter_retry
+        )
+
+    def _run_goalsifter_retry(self) -> None:
+        self._goalsifter_retry_job = None
+        self.sync_goalsifter_outbox()
 
     def bind_current_focus_item(self) -> None:
         """Explicitly bind the selected local item to a known remote DW id."""
@@ -586,12 +723,24 @@ class PomodoroApp:
                 self.data_manager.mark_focusflow_event_synced(event['event_id'])
                 synced += 1
             except GoalSifterRemoteError as error:
+                if error.status_code == 409:
+                    self.data_manager.mark_focusflow_event_conflict(event['event_id'], str(error))
+                    self._goalsifter_sync_in_flight = False
+                    self.ui.refresh_goalsifter_focus_items(
+                        self.data_manager.get_goalsifter_focus_items(),
+                        f"已同步 {synced} 条；发现事件冲突，已暂停该事件：{error}",
+                    )
+                    return
                 self.data_manager.record_focusflow_event_error(event['event_id'], str(error))
+                self._goalsifter_sync_in_flight = False
                 self.ui.refresh_goalsifter_focus_items(
                     self.data_manager.get_goalsifter_focus_items(),
                     f"已同步 {synced} 条；其余保留待同步：{error}",
                 )
+                self._schedule_goalsifter_retry()
                 return
+        self._goalsifter_sync_in_flight = False
+        self._goalsifter_retry_delay = 1
         self.ui.refresh_goalsifter_focus_items(
             self.data_manager.get_goalsifter_focus_items(), f"已同步 {synced} 条 Outbox 事件。"
         )
@@ -711,11 +860,18 @@ class PomodoroApp:
         if self.is_running:
             if messagebox.askyesno("Timer Running", "Quit while timer is running?"):
                 self.abort_session(is_closing=True)
+                self._shutdown_goalsifter_worker()
                 self.data_manager.close()
                 self.root.destroy()
         else:
+            self._shutdown_goalsifter_worker()
             self.data_manager.close()
             self.root.destroy()
+
+    def _shutdown_goalsifter_worker(self) -> None:
+        executor = getattr(self, "_goalsifter_executor", None)
+        if executor is not None:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def start_session(self, project_name: Optional[str] = None, task_name: Optional[str] = None) -> None:
         """Initiates a Work or Break session."""
@@ -815,6 +971,7 @@ class PomodoroApp:
         self.ui.update_quick_start_buttons(recent_tasks)
 
         self.current_project, self.current_task = "", ""
+        self.current_goalsifter_task_id = None
         self.ui.show_setup_view()
         self.ui.set_timer_mode("Idle")
         self.update_progress_display()

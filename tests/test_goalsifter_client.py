@@ -42,6 +42,7 @@ def test_task_snapshot_accepts_server_tasks_envelope():
             "task_id": "dw-2", "task_name": "确定IB开发方向", "kr_ref": None,
             "pomo_estimate": 3, "pomo_count": 0, "status": "活跃",
             "created_at": "2026-07-12T01:04:43", "last_event_at": "2026-07-12 09:04:43",
+            "completed_at": None,
         }]}).encode()
 
     tasks = GoalSifterClient(_configured_settings(), request=request).get_active_dw_tasks()
@@ -49,6 +50,7 @@ def test_task_snapshot_accepts_server_tasks_envelope():
     assert len(tasks) == 1
     assert tasks[0].task_id == "dw-2"
     assert tasks[0].status == "活跃"
+    assert tasks[0].completed_at is None
 
 
 def test_empty_tasks_envelope_yields_no_tasks():
@@ -74,6 +76,39 @@ def test_duplicate_event_is_a_successful_idempotent_response():
     })
 
     assert result["duplicate"] is True
+
+
+def test_complete_dw_task_posts_to_task_complete_endpoint():
+    calls = []
+
+    def request(method, url, headers, body=None):
+        calls.append((method, url, headers, body))
+        return 200, json.dumps({
+            "task_id": "dw-1", "status": "已完成",
+            "completed_at": "2026-07-14T10:00:00", "exp_awarded": 5,
+        }).encode()
+
+    result = GoalSifterClient(_configured_settings(), request=request).complete_dw_task("dw-1")
+
+    assert result["status"] == "已完成"
+    assert calls == [(
+        "POST", "http://127.0.0.1:18000/api/v1/focusflow/tasks/dw-1/complete",
+        {"Authorization": "Bearer token-1"}, None,
+    )]
+
+
+def test_complete_dw_task_propagates_non_active_error():
+    def request(_method, _url, _headers, _body=None):
+        return 422, b'{"detail":"task is not active dw"}'
+
+    client = GoalSifterClient(_configured_settings(), request=request)
+
+    try:
+        client.complete_dw_task("dw-1")
+    except GoalSifterRemoteError as error:
+        assert error.status_code == 422
+    else:
+        raise AssertionError("Expected GoalSifterRemoteError")
 
 
 def test_is_tunnel_ready_true_when_port_listening():

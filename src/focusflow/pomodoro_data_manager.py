@@ -7,7 +7,7 @@ from typing import List, Optional, Dict, Any
 import pandas as pd
 
 # Define the latest version of the database schema
-LATEST_DB_VERSION = 7
+LATEST_DB_VERSION = 8
 
 class PomodoroDataManager:
     """
@@ -103,6 +103,17 @@ class PomodoroDataManager:
                 self.conn.commit()
                 print("Migration to version 7 successful.")
 
+            if db_version < 8:
+                cursor.execute("PRAGMA table_info('focus_outbox')")
+                columns = [info[1] for info in cursor.fetchall()]
+                if 'sync_state' not in columns:
+                    self.cursor.execute(
+                        "ALTER TABLE focus_outbox ADD COLUMN sync_state TEXT NOT NULL DEFAULT 'pending'"
+                    )
+                self.conn.execute('PRAGMA user_version = 8')
+                self.conn.commit()
+                print("Migration to version 8 successful.")
+
         except sqlite3.Error as e:
             print(f"Database migration failed: {e}")
             
@@ -150,7 +161,8 @@ class PomodoroDataManager:
                     duration_minutes INTEGER NOT NULL,
                     status TEXT NOT NULL,
                     attempts INTEGER NOT NULL DEFAULT 0,
-                    last_error TEXT
+                    last_error TEXT,
+                    sync_state TEXT NOT NULL DEFAULT 'pending'
                 )
             ''')
             self.conn.commit()
@@ -304,7 +316,7 @@ class PomodoroDataManager:
         self.cursor.execute('''
             SELECT event_id, device_id, task_id, started_at, ended_at,
                    duration_minutes, status
-            FROM focus_outbox ORDER BY rowid
+            FROM focus_outbox WHERE sync_state = 'pending' ORDER BY rowid
         ''')
         return [
             {
@@ -327,6 +339,23 @@ class PomodoroDataManager:
             WHERE event_id = ?
         ''', (error[:500], event_id))
         self.conn.commit()
+
+    def mark_focusflow_event_conflict(self, event_id: str, error: str) -> None:
+        """Block a permanently conflicting event until the user resolves it."""
+        self.cursor.execute('''
+            UPDATE focus_outbox SET sync_state = 'blocked', last_error = ?
+            WHERE event_id = ?
+        ''', (error[:500], event_id))
+        self.conn.commit()
+
+    def get_blocked_focusflow_events(self) -> List[Dict[str, Any]]:
+        self.cursor.execute('''
+            SELECT event_id, device_id, task_id, started_at, ended_at,
+                   duration_minutes, status, attempts, last_error
+            FROM focus_outbox WHERE sync_state = 'blocked' ORDER BY rowid
+        ''')
+        columns = [column[0] for column in self.cursor.description]
+        return [dict(zip(columns, row)) for row in self.cursor.fetchall()]
 
     def get_local_focus_items(self) -> List[Dict[str, Any]]:
         """Return active local tasks as offline-first focus-item cards."""
@@ -404,7 +433,7 @@ class PomodoroDataManager:
               ON session.project_name = focus.project_name
              AND session.task_name = focus.task_name
              AND session.session_type = 'Work' AND session.status = 'Completed'
-            WHERE focus.source = 'goalsifter' AND task.status = 'In Progress'
+            WHERE focus.source = 'goalsifter' AND focus.state != 'archived'
             GROUP BY focus.local_id, focus.project_name, focus.task_name,
                      task.estimated_pomodoros, focus.state, focus.source,
                      focus.context_label, focus.goalsifter_task_id
@@ -419,6 +448,16 @@ class PomodoroDataManager:
             }
             for row in self.cursor.fetchall()
         ]
+
+    def reconcile_goalsifter_focus_items(self, active_task_ids: set[str]) -> None:
+        """Archive remote mirrors absent from the latest active-task snapshot."""
+        self.cursor.execute('''
+            UPDATE focus_items
+            SET state = 'archived'
+            WHERE source = 'goalsifter'
+              AND goalsifter_task_id NOT IN ({})
+        '''.format(','.join('?' for _ in active_task_ids) or "NULL"), tuple(active_task_ids))
+        self.conn.commit()
 
     def merge_from(self, source_db_path: str) -> None:
         """

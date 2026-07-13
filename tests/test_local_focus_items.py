@@ -62,6 +62,19 @@ def test_goalsifter_mirror_is_not_listed_as_a_local_draft(tmp_path):
     manager.close()
 
 
+def test_reconcile_goalsifter_focus_items_archives_tasks_missing_from_active_snapshot(tmp_path):
+    manager = PomodoroDataManager(str(tmp_path), "focusflow.db")
+    manager.upsert_goalsifter_focus_item({
+        "task_id": "dw-done", "task_name": "Already done", "kr_ref": None,
+        "pomo_estimate": 1, "pomo_count": 0, "status": "active",
+    })
+
+    manager.reconcile_goalsifter_focus_items({"dw-other"})
+
+    assert manager.get_goalsifter_focus_items() == []
+    manager.close()
+
+
 def test_archived_local_task_leaves_execution_queue_but_keeps_history(tmp_path):
     manager = PomodoroDataManager(str(tmp_path), "focusflow.db")
     manager.add_or_update_task("Local", "Old task", 12)

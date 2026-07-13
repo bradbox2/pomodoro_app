@@ -29,6 +29,7 @@ class GoalSifterTask:
     status: str
     created_at: str
     last_event_at: str | None
+    completed_at: str | None = None
 
 
 class GoalSifterClient:
@@ -90,6 +91,13 @@ class GoalSifterClient:
     def post_pomo_event(self, event: dict[str, Any]) -> dict[str, Any]:
         status, body = self._request(
             "POST", f"{self.base_url}/pomo-events", self._headers(), json.dumps(event).encode()
+        )
+        return self._decode(status, body)
+
+    def complete_dw_task(self, task_id: str) -> dict[str, Any]:
+        """Manually complete one active GoalSifter DW task."""
+        status, body = self._request(
+            "POST", f"{self.base_url}/tasks/{task_id}/complete", self._headers()
         )
         return self._decode(status, body)
 
