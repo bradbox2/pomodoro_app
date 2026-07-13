@@ -47,7 +47,8 @@ class GoalSifterClient:
             "ssh", "-o", "ExitOnForwardFailure=yes", "-N", "-L",
             f"{self.settings.local_port}:127.0.0.1:8000",
             self.settings.ssh_host_alias,
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
     @staticmethod
     def tunnel_failure_message(tunnel: subprocess.Popen) -> str | None:

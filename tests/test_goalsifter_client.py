@@ -126,6 +126,7 @@ def test_start_tunnel_fails_loudly_when_forwarding_fails(monkeypatch):
     assert "-o" in args
     assert "ExitOnForwardFailure=yes" in args
     assert kwargs["stderr"] is not None
+    assert kwargs["creationflags"] == getattr(__import__("subprocess"), "CREATE_NO_WINDOW", 0)
     process = fake_popen(args, **kwargs)
     assert GoalSifterClient.tunnel_failure_message(process) == (
         "SSH 隧道进程已退出（代码 255）：ssh: Could not resolve hostname goalsifter"
