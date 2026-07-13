@@ -144,3 +144,33 @@ def test_contract_422_is_exposed_without_retrying():
         assert error.status_code == 422
     else:
         raise AssertionError("Expected GoalSifterRemoteError")
+
+
+def test_url_request_marks_json_bodies_as_json(monkeypatch):
+    captured = {}
+
+    class Response:
+        status = 200
+
+        def read(self):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def fake_urlopen(request, timeout):
+        captured["content_type"] = request.get_header("Content-type")
+        captured["timeout"] = timeout
+        return Response()
+
+    monkeypatch.setattr("focusflow.goalsifter_client.urlopen", fake_urlopen)
+
+    GoalSifterClient._url_request(
+        "POST", "http://127.0.0.1:18000/api/v1/focusflow/pomo-events",
+        {"Authorization": "Bearer token"}, b'{"event_id":"event-1"}',
+    )
+
+    assert captured == {"content_type": "application/json", "timeout": 10}

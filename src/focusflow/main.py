@@ -892,6 +892,7 @@ class PomodoroApp:
         
         if session_type == 'Work':
             self._get_and_record_feedback(self.timer.start_time, duration, status)
+            self.root.after(0, self._sync_goalsifter_after_work)
             self.update_progress_display()
             
             if RESET_LONG_BREAK_ON_RESTART:
@@ -912,6 +913,11 @@ class PomodoroApp:
             })
             self.update_db_status()
             self._setup_next_work_session()
+
+    def _sync_goalsifter_after_work(self) -> None:
+        """Start a retryable remote sync after completing a bound DW session."""
+        if self.current_focus_source == "goalsifter":
+            self.sync_goalsifter_outbox()
 
 def main() -> None:
     """Entry point: create the root window and run the application."""

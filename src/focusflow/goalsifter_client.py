@@ -117,7 +117,10 @@ class GoalSifterClient:
 
     @staticmethod
     def _url_request(method: str, url: str, headers: dict[str, str], body: bytes | None = None):
-        request = Request(url, data=body, headers=headers, method=method)
+        request_headers = dict(headers)
+        if body is not None:
+            request_headers.setdefault("Content-Type", "application/json")
+        request = Request(url, data=body, headers=request_headers, method=method)
         try:
             with urlopen(request, timeout=10) as response:
                 return response.status, response.read()
