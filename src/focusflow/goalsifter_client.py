@@ -44,10 +44,28 @@ class GoalSifterClient:
         if not self.settings.is_configured:
             raise GoalSifterRemoteError(0, "GoalSifter SSH alias and Bearer token are required")
         return subprocess.Popen([
-            "ssh", "-N", "-L",
+            "ssh", "-o", "ExitOnForwardFailure=yes", "-N", "-L",
             f"{self.settings.local_port}:127.0.0.1:8000",
             self.settings.ssh_host_alias,
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+
+    @staticmethod
+    def tunnel_failure_message(tunnel: subprocess.Popen) -> str | None:
+        """Return actionable stderr when an already-started SSH tunnel exits."""
+        return_code = tunnel.poll()
+        if return_code is None:
+            return None
+        detail = ""
+        stderr = getattr(tunnel, "stderr", None)
+        if stderr is not None:
+            try:
+                detail = stderr.read().strip()
+            except (OSError, ValueError):
+                pass
+        if detail:
+            detail = " ".join(detail.split())[:300]
+            return f"SSH 隧道进程已退出（代码 {return_code}）：{detail}"
+        return f"SSH 隧道进程已退出（代码 {return_code}；请检查别名、密钥、网络和端口转发配置）。"
 
     def is_tunnel_ready(self, timeout: float = 0.5) -> bool:
         """Cheap TCP probe: is the forwarded local port actually accepting connections yet?"""

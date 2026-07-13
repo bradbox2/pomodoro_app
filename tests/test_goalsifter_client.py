@@ -1,4 +1,5 @@
 import json
+import io
 import socket
 
 from focusflow.goalsifter_client import GoalSifterClient, GoalSifterRemoteError
@@ -102,6 +103,33 @@ def test_is_tunnel_ready_false_when_nothing_listening():
         local_port=port, bearer_token="token-1",
     )
     assert GoalSifterClient(settings).is_tunnel_ready(timeout=0.2) is False
+
+
+def test_start_tunnel_fails_loudly_when_forwarding_fails(monkeypatch):
+    calls = []
+
+    class FakeProcess:
+        stderr = io.StringIO("ssh: Could not resolve hostname goalsifter")
+
+        def poll(self):
+            return 255
+
+    def fake_popen(args, **kwargs):
+        calls.append((args, kwargs))
+        return FakeProcess()
+
+    monkeypatch.setattr("focusflow.goalsifter_client.subprocess.Popen", fake_popen)
+
+    GoalSifterClient(_configured_settings()).start_tunnel()
+
+    args, kwargs = calls[0]
+    assert "-o" in args
+    assert "ExitOnForwardFailure=yes" in args
+    assert kwargs["stderr"] is not None
+    process = fake_popen(args, **kwargs)
+    assert GoalSifterClient.tunnel_failure_message(process) == (
+        "SSH 隧道进程已退出（代码 255）：ssh: Could not resolve hostname goalsifter"
+    )
 
 
 def test_contract_422_is_exposed_without_retrying():

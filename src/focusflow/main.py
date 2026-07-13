@@ -466,7 +466,8 @@ class PomodoroApp:
             on_ready()
             return
         if self.goalsifter_tunnel is not None and self.goalsifter_tunnel.poll() is not None:
-            on_timeout("SSH 隧道进程已退出（请检查别名/密钥/网络，或在「连接设置」重试）。")
+            on_timeout(self.goalsifter_client.tunnel_failure_message(self.goalsifter_tunnel) or
+                       "SSH 隧道进程已退出，请在「连接设置」重试。")
             return
         if attempts <= 0:
             on_timeout("GoalSifter 隧道连接超时；SSH 可能仍在建立或配置有误，请稍后重试。")
