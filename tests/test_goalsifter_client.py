@@ -1,4 +1,5 @@
 import json
+import socket
 
 from focusflow.goalsifter_client import GoalSifterClient, GoalSifterRemoteError
 from focusflow.goalsifter_settings import GoalSifterSettings
@@ -72,6 +73,35 @@ def test_duplicate_event_is_a_successful_idempotent_response():
     })
 
     assert result["duplicate"] is True
+
+
+def test_is_tunnel_ready_true_when_port_listening():
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    try:
+        settings = GoalSifterSettings(
+            device_id="device-1", ssh_host_alias="goalsifter",
+            local_port=port, bearer_token="token-1",
+        )
+        assert GoalSifterClient(settings).is_tunnel_ready() is True
+    finally:
+        listener.close()
+
+
+def test_is_tunnel_ready_false_when_nothing_listening():
+    # Bind then close to obtain a port that is (almost certainly) now free.
+    probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    probe.bind(("127.0.0.1", 0))
+    port = probe.getsockname()[1]
+    probe.close()
+
+    settings = GoalSifterSettings(
+        device_id="device-1", ssh_host_alias="goalsifter",
+        local_port=port, bearer_token="token-1",
+    )
+    assert GoalSifterClient(settings).is_tunnel_ready(timeout=0.2) is False
 
 
 def test_contract_422_is_exposed_without_retrying():

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -47,6 +48,14 @@ class GoalSifterClient:
             f"{self.settings.local_port}:127.0.0.1:8000",
             self.settings.ssh_host_alias,
         ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    def is_tunnel_ready(self, timeout: float = 0.5) -> bool:
+        """Cheap TCP probe: is the forwarded local port actually accepting connections yet?"""
+        try:
+            with socket.create_connection(("127.0.0.1", self.settings.local_port), timeout):
+                return True
+        except OSError:
+            return False
 
     def get_active_dw_tasks(self) -> list[GoalSifterTask]:
         status, body = self._request("GET", f"{self.base_url}/tasks", self._headers())

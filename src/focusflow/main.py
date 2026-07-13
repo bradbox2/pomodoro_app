@@ -455,6 +455,24 @@ class PomodoroApp:
         ctk.CTkButton(buttons, text="保存并测试连接", width=150,
                       command=_save_and_test).pack(side="right", padx=(0, 8))
 
+    def _await_goalsifter_ready(self, on_ready, on_timeout, attempts: int = 20) -> None:
+        """Poll the tunnel port on the Tk loop (non-blocking) until it accepts connections.
+
+        Fires on_ready() as soon as the forwarded port is listening; on_timeout(msg) if the
+        ssh process died early or the port never came up within ~5s. Replaces the old blind
+        350ms wait that raced SSH establishment and surfaced WinError 10061.
+        """
+        if self.goalsifter_client.is_tunnel_ready():
+            on_ready()
+            return
+        if self.goalsifter_tunnel is not None and self.goalsifter_tunnel.poll() is not None:
+            on_timeout("SSH 隧道进程已退出（请检查别名/密钥/网络，或在「连接设置」重试）。")
+            return
+        if attempts <= 0:
+            on_timeout("GoalSifter 隧道连接超时；SSH 可能仍在建立或配置有误，请稍后重试。")
+            return
+        self.root.after(250, lambda: self._await_goalsifter_ready(on_ready, on_timeout, attempts - 1))
+
     def refresh_goalsifter_tasks(self) -> None:
         """Fetch active DWs only after an explicit user refresh request."""
         if not self.goalsifter_settings.is_configured:
@@ -462,13 +480,15 @@ class PomodoroApp:
                 [], "GoalSifter 尚未配置 SSH alias 与 Bearer token。"
             )
             return
+
+        def on_timeout(message: str) -> None:
+            self.ui.refresh_goalsifter_focus_items([], f"GoalSifter 不可用：{message}")
+
         try:
             if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
                 self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
-                self.root.after(350, self._load_goalsifter_tasks)
                 self.ui.refresh_goalsifter_focus_items([], "正在连接 GoalSifter…")
-                return
-            self._load_goalsifter_tasks()
+            self._await_goalsifter_ready(self._load_goalsifter_tasks, on_timeout)
         except (GoalSifterRemoteError, OSError) as error:
             self.ui.refresh_goalsifter_focus_items([], f"GoalSifter 不可用：{error}")
 
@@ -488,13 +508,14 @@ class PomodoroApp:
         if not self.goalsifter_settings.is_configured:
             self.ui.refresh_goalsifter_focus_items([], "GoalSifter 尚未配置 SSH alias 与 Bearer token。")
             return
+        def on_timeout(message: str) -> None:
+            self.ui.refresh_goalsifter_focus_items([], f"无法同步 Outbox：{message}")
+
         try:
             if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
                 self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
                 self.ui.refresh_goalsifter_focus_items([], "正在连接 GoalSifter 并同步 Outbox…")
-                self.root.after(350, self._sync_pending_goalsifter_events)
-                return
-            self._sync_pending_goalsifter_events()
+            self._await_goalsifter_ready(self._sync_pending_goalsifter_events, on_timeout)
         except (GoalSifterRemoteError, OSError) as error:
             self.ui.refresh_goalsifter_focus_items([], f"无法同步 Outbox：{error}")
 
@@ -531,21 +552,28 @@ class PomodoroApp:
         if not self.goalsifter_settings.is_configured:
             messagebox.showwarning("GoalSifter 未配置", "请先配置 SSH alias 与 Bearer token。")
             return
+        def do_create() -> None:
+            try:
+                result = self.goalsifter_client.create_dw_task(self.current_task, self.current_task_estimate)
+                item = self.data_manager.ensure_focus_item(self.current_project, self.current_task)
+                self.data_manager.bind_focus_item(item['local_id'], result['task_id'], self.goalsifter_settings.device_id)
+                self.reset_state_and_ui()
+                messagebox.showinfo("已创建并绑定", "新 DW 已创建；历史番茄需要由你手动同步。")
+            except GoalSifterRemoteError as error:
+                if error.status_code == 422:
+                    messagebox.showwarning("需要澄清", "GoalSifter 拒绝创建该任务，请回 TTC/GoalSifter 完成澄清后再绑定。")
+                else:
+                    messagebox.showerror("创建失败", f"GoalSifter 不可用：{error}")
+
+        def on_timeout(message: str) -> None:
+            messagebox.showerror("创建失败", f"GoalSifter 不可用：{message}")
+
         try:
             if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
                 self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
-                self.root.after(350, self.create_and_bind_current_focus_item)
-                return
-            result = self.goalsifter_client.create_dw_task(self.current_task, self.current_task_estimate)
-            item = self.data_manager.ensure_focus_item(self.current_project, self.current_task)
-            self.data_manager.bind_focus_item(item['local_id'], result['task_id'], self.goalsifter_settings.device_id)
-            self.reset_state_and_ui()
-            messagebox.showinfo("已创建并绑定", "新 DW 已创建；历史番茄需要由你手动同步。")
-        except GoalSifterRemoteError as error:
-            if error.status_code == 422:
-                messagebox.showwarning("需要澄清", "GoalSifter 拒绝创建该任务，请回 TTC/GoalSifter 完成澄清后再绑定。")
-            else:
-                messagebox.showerror("创建失败", f"GoalSifter 不可用：{error}")
+            self._await_goalsifter_ready(do_create, on_timeout)
+        except (GoalSifterRemoteError, OSError) as error:
+            messagebox.showerror("创建失败", f"GoalSifter 不可用：{error}")
 
     def _sync_pending_goalsifter_events(self) -> None:
         synced = 0
