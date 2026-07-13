@@ -53,6 +53,7 @@ dist/
 # Claude Code
 .claude/
 .superpowers/
+.worktrees/
 
 # OS/System
 Thumbs.db
