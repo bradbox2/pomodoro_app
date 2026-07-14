@@ -19,8 +19,8 @@ YELLOW = BG_COLOR      # Deprecated, mapped to BG for backward compat
 FONT_NAME = "Segoe UI"
 
 # --- Timer Constants (in minutes) ---
-WORK_MIN = 2
-SHORT_BREAK_MIN = 1
+WORK_MIN = 25
+SHORT_BREAK_MIN = 5
 LONG_BREAK_MIN = 15
 
 # --- Long Break Configuration ---

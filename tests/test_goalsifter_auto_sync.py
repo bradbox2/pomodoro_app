@@ -118,6 +118,41 @@ def test_refresh_queues_remote_work_without_blocking_tk_callback():
     assert calls == ["ui", "submitted"]
 
 
+def test_outbox_sync_queues_network_work_without_blocking_tk_callback():
+    app = PomodoroApp.__new__(PomodoroApp)
+    app.goalsifter_settings = type("Settings", (), {"is_configured": True})()
+    app._goalsifter_sync_in_flight = False
+    app.data_manager = type("Data", (), {
+        "get_pending_focusflow_events": lambda *_args: [{"event_id": "evt-1"}],
+        "get_goalsifter_focus_items": lambda *_args: [],
+    })()
+    calls = []
+    app._submit_goalsifter_operation = lambda operation, success, failure: calls.append("submitted")
+    app.ui = type("UI", (), {
+        "refresh_goalsifter_focus_items": lambda *_args: calls.append("ui"),
+    })()
+
+    app.sync_goalsifter_outbox()
+
+    assert calls == ["ui", "submitted"]
+
+
+def test_create_and_bind_queues_remote_creation_without_blocking_tk_callback():
+    app = PomodoroApp.__new__(PomodoroApp)
+    app.current_project = "Office"
+    app.current_task = "Remote task"
+    app.current_focus_source = "local"
+    app.current_task_estimate = 2
+    app.goalsifter_settings = type("Settings", (), {
+        "is_configured": True, "device_id": "device-1",
+    })()
+    app._submit_goalsifter_operation = lambda operation, success, failure: setattr(app, "submitted", True)
+
+    app.create_and_bind_current_focus_item()
+
+    assert app.submitted is True
+
+
 def test_closing_stops_remote_worker_before_destroying_window():
     app = PomodoroApp.__new__(PomodoroApp)
     app.is_running = False

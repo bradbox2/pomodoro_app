@@ -16,10 +16,15 @@ class FeedbackWindow(Toplevel):
         self.lift()
         self.focus_force()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
-        
+
+        from focusflow.app_config_manager import AppConfigManager
+        self.config_manager = AppConfigManager()
+        moods = self.config_manager.get_feedback_moods()
+        default_mood = moods[0] if moods else {"name": "Neutral", "score": 5}
+
         self.feedback_data = {
-            "focus_score": 5,
-            "end_mood": "Neutral"
+            "focus_score": default_mood.get("score", 5),
+            "end_mood": default_mood.get("name", "Neutral")
         }
 
         # Load the image
@@ -51,9 +56,7 @@ class FeedbackWindow(Toplevel):
         mood_frame.pack(pady=5)
         
         # Load moods from config
-        from focusflow.app_config_manager import AppConfigManager
-        config_manager = AppConfigManager()
-        moods = config_manager.get_feedback_moods()
+        moods = self.config_manager.get_feedback_moods()
         
         s = ttk.Style()
         s.configure('small.TButton', font=('Helvetica', 8), padding=(5, 5))

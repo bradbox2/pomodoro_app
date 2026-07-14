@@ -1,6 +1,7 @@
 # pomodoro_timer.py
 import threading
 import time
+import math
 from datetime import datetime
 
 class PomodoroTimer:
@@ -24,12 +25,14 @@ class PomodoroTimer:
         }
         self.update_callback = update_callback
         self.finish_callback = finish_callback
-        
+
         self.current_session_type = "Work"
         self.start_time = None
-        
+
         self._timer_thread = None
         self._stop_event = threading.Event()
+        self._started_monotonic = None
+        self._deadline = None
 
     def start(self, session_type):
         """
@@ -44,6 +47,8 @@ class PomodoroTimer:
         self.current_session_type = session_type
         self.start_time = datetime.now()
         duration_seconds = self.settings[session_type] * 60
+        self._started_monotonic = time.monotonic()
+        self._deadline = self._started_monotonic + duration_seconds
 
         self._stop_event.clear()
         self._timer_thread = threading.Thread(
@@ -58,15 +63,21 @@ class PomodoroTimer:
         if self._timer_thread and self._timer_thread.is_alive():
             self._stop_event.set()
             self._timer_thread.join() # Wait for the thread to finish
-        
+
         duration = 0
         status = "Interrupted"
         if self.start_time:
-             # Calculate elapsed time if timer was running
-            duration = int((datetime.now() - self.start_time).total_seconds() / 60)
-        
+            if self._started_monotonic is not None:
+                elapsed_seconds = max(0.0, time.monotonic() - self._started_monotonic)
+            else:
+                elapsed_seconds = max(0.0, (datetime.now() - self.start_time).total_seconds())
+            if elapsed_seconds > 0:
+                duration = max(1, math.ceil(elapsed_seconds / 60))
+
         # Reset to initial state
         self.start_time = None
+        self._started_monotonic = None
+        self._deadline = None
         return self.current_session_type, duration, status
 
 
@@ -77,12 +88,16 @@ class PomodoroTimer:
         Args:
             count (int): The total seconds to count down from.
         """
-        while count > 0 and not self._stop_event.is_set():
-            mins, secs = divmod(count, 60)
+        deadline = self._deadline or (time.monotonic() + count)
+        while not self._stop_event.is_set():
+            remaining = max(0, math.ceil(deadline - time.monotonic()))
+            mins, secs = divmod(remaining, 60)
             self.update_callback(f"{mins:02d}:{secs:02d}")
-            time.sleep(1)
-            count -= 1
-        
+            if remaining <= 0:
+                break
+            if self._stop_event.wait(min(1.0, max(0.0, deadline - time.monotonic()))):
+                return
+
         # Check if the timer finished naturally (was not stopped)
         if not self._stop_event.is_set():
             self.update_callback("00:00")

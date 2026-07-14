@@ -451,12 +451,20 @@ class PomodoroDataManager:
 
     def reconcile_goalsifter_focus_items(self, active_task_ids: set[str]) -> None:
         """Archive remote mirrors absent from the latest active-task snapshot."""
-        self.cursor.execute('''
-            UPDATE focus_items
-            SET state = 'archived'
-            WHERE source = 'goalsifter'
-              AND goalsifter_task_id NOT IN ({})
-        '''.format(','.join('?' for _ in active_task_ids) or "NULL"), tuple(active_task_ids))
+        if active_task_ids:
+            placeholders = ",".join("?" for _ in active_task_ids)
+            self.cursor.execute(f'''
+                UPDATE focus_items
+                SET state = 'archived'
+                WHERE source = 'goalsifter'
+                  AND goalsifter_task_id NOT IN ({placeholders})
+            ''', tuple(active_task_ids))
+        else:
+            self.cursor.execute('''
+                UPDATE focus_items
+                SET state = 'archived'
+                WHERE source = 'goalsifter'
+            ''')
         self.conn.commit()
 
     def merge_from(self, source_db_path: str) -> None:
@@ -468,7 +476,7 @@ class PomodoroDataManager:
         """
         try:
             # Attach the source database
-            self.cursor.execute(f"ATTACH DATABASE '{source_db_path}' AS source_db")
+            self.cursor.execute("ATTACH DATABASE ? AS source_db", (source_db_path,))
             print("Successfully attached both databases.")
 
             # 1. Merge 'projects' - Simple insert, no conflicts on other data
@@ -516,7 +524,7 @@ class PomodoroDataManager:
                                             (est, status, sound, p_name, t_name))
 
             self.conn.commit()
-            self.cursor.execute("DETACH DATABASE 'source_db'")
+            self.cursor.execute("DETACH DATABASE source_db")
             print("Merge successful.")
         except sqlite3.Error as e:
             print(f"Error during database merge: {e}")
@@ -691,8 +699,8 @@ class PomodoroDataManager:
     def add_or_update_task(self, project_name: str, task_name: str, estimate: int, sound_preference: str = 'dida') -> None:
         """Adds a new task or updates an existing one."""
         if not all([self.conn, project_name, task_name]): return
-        if not 1 <= estimate <= 99:
-            raise ValueError("Focus item estimate must be between 1 and 99")
+        if not 1 <= estimate <= 4:
+            raise ValueError("Focus item estimate must be between 1 and 4")
         self.add_project(project_name)
         try:
             self.cursor.execute('''

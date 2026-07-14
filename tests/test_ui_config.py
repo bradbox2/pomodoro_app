@@ -3,6 +3,9 @@ Test script to verify UI configuration changes
 """
 from focusflow.config import *
 from focusflow.ui_manager import calculate_home_size
+from focusflow.ui_manager import PygameTimerWidget, UIManager
+import inspect
+from pathlib import Path
 
 def test_window_size():
     """Home and topmost timer use deliberately different window sizes."""
@@ -27,6 +30,35 @@ def test_spacing_constants():
     assert PADDING_MEDIUM == 10, f"PADDING_MEDIUM incorrect: {PADDING_MEDIUM}"
     assert PADDING_LARGE == 15, f"PADDING_LARGE incorrect: {PADDING_LARGE}"
     assert PADDING_XLARGE == 20, f"PADDING_XLARGE incorrect: {PADDING_XLARGE}"
+
+
+def test_particle_widget_restores_full_effect_dimensions():
+    signature = inspect.signature(PygameTimerWidget.__init__)
+    assert signature.parameters["width"].default == 260
+    assert signature.parameters["height"].default == 200
+    source = Path(__file__).parents[1].joinpath("src", "focusflow", "ui_manager.py").read_text(encoding="utf-8")
+    assert "PygameTimerWidget(pygame_container, width=260, height=200" in source
+
+
+def test_settings_window_exposes_session_feedback_tab():
+    source = Path(__file__).parents[1].joinpath("src", "focusflow", "main.py").read_text(encoding="utf-8")
+    assert 'feedback_tab = tabs.add("Session Feedback")' in source
+    assert "add_feedback_mood" in source
+    assert "update_feedback_mood" in source
+    assert "delete_feedback_mood" in source
+
+
+def test_task_source_actions_are_separated_from_remote_task_list():
+    widget_source = inspect.getsource(UIManager._create_widgets)
+    quick_start_source = inspect.getsource(UIManager.update_quick_start_buttons)
+    remote_list_source = inspect.getsource(UIManager.refresh_goalsifter_focus_items)
+
+    assert 'command=self._on_task_source_changed' in widget_source
+    assert 'text="GoalSifter 操作:' in widget_source
+    assert 'text="Quick Start:"' in quick_start_source
+    assert 'text="刷新 GoalSifter 任务"' not in remote_list_source
+    assert 'text="手动同步 Outbox"' not in remote_list_source
+    assert 'text="⚙ 连接设置"' not in remote_list_source
 
 if __name__ == "__main__":
     print("=" * 50)

@@ -75,9 +75,38 @@ def test_reconcile_goalsifter_focus_items_archives_tasks_missing_from_active_sna
     manager.close()
 
 
+def test_reconcile_empty_goalsifter_snapshot_archives_all_remote_tasks(tmp_path):
+    manager = PomodoroDataManager(str(tmp_path), "focusflow.db")
+    manager.upsert_goalsifter_focus_item({
+        "task_id": "dw-done", "task_name": "Already done", "kr_ref": None,
+        "pomo_estimate": 1, "pomo_count": 0, "status": "active",
+    })
+
+    manager.reconcile_goalsifter_focus_items(set())
+
+    assert manager.get_goalsifter_focus_items() == []
+    manager.close()
+
+
+def test_merge_accepts_database_path_containing_single_quote(tmp_path):
+    source_dir = tmp_path / "source's data"
+    target_dir = tmp_path / "target"
+    source_dir.mkdir()
+    target_dir.mkdir()
+    source = PomodoroDataManager(str(source_dir), "source.db")
+    source.add_or_update_task("Office", "Imported", 2)
+    source.close()
+
+    target = PomodoroDataManager(str(target_dir), "target.db")
+    target.merge_from(str(source_dir / "source.db"))
+
+    assert target.get_task_details("Office", "Imported")["estimate"] == 2
+    target.close()
+
+
 def test_archived_local_task_leaves_execution_queue_but_keeps_history(tmp_path):
     manager = PomodoroDataManager(str(tmp_path), "focusflow.db")
-    manager.add_or_update_task("Local", "Old task", 12)
+    manager.add_or_update_task("Local", "Old task", 4)
     manager.archive_local_focus_item("Local", "Old task")
 
     assert manager.get_local_focus_items() == []
@@ -87,11 +116,11 @@ def test_archived_local_task_leaves_execution_queue_but_keeps_history(tmp_path):
     manager.close()
 
 
-@pytest.mark.parametrize("estimate", [0, 100])
+@pytest.mark.parametrize("estimate", [0, 5, 100])
 def test_local_focus_item_rejects_estimates_outside_one_to_four(tmp_path, estimate):
     manager = PomodoroDataManager(str(tmp_path), "focusflow.db")
 
-    with pytest.raises(ValueError, match="between 1 and 99"):
+    with pytest.raises(ValueError, match="between 1 and 4"):
         manager.add_or_update_task("Office", "Too large", estimate)
 
     assert manager.get_all_projects() == []

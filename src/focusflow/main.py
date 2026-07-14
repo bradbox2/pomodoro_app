@@ -29,6 +29,9 @@ from focusflow.interruption_window import InterruptionWindow
 from focusflow.goalsifter_client import GoalSifterClient, GoalSifterRemoteError
 from focusflow.goalsifter_settings import GoalSifterSettings
 
+APP_LOGGER = logging.getLogger("focusflow.app")
+BACKUP_LOGGER = logging.getLogger("focusflow.backup")
+
 def get_base_path():
     """Project root holding bundled assets (images/, sound/) and legacy data.
 
@@ -59,6 +62,7 @@ class PomodoroApp:
         self.base_dir = get_base_path()
         self.paths = AppPaths.from_environment(Path(self.base_dir))
         self.paths.ensure_ready()
+        self._configure_loggers()
         self.config_manager = AppConfigManager(self.paths.config_path)
         self.preferences = self.config_manager.get_preferences()
 
@@ -169,10 +173,22 @@ class PomodoroApp:
     @staticmethod
     def _report_callback_exception(exc_type, exc_value, exc_traceback) -> None:
         """Keep one bad Tk callback from terminating the whole desktop app."""
-        logging.error(
+        APP_LOGGER.error(
             "Unhandled FocusFlow callback exception",
             exc_info=(exc_type, exc_value, exc_traceback),
         )
+
+    def _configure_loggers(self) -> None:
+        """Keep application errors and database backup diagnostics separate."""
+        formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+        for logger, filename in ((APP_LOGGER, "app.log"), (BACKUP_LOGGER, "backup.log")):
+            logger.setLevel(logging.INFO)
+            logger.propagate = False
+            if not any(getattr(handler, "_focusflow_file", False) for handler in logger.handlers):
+                handler = logging.FileHandler(self.paths.logs_dir / filename, encoding="utf-8")
+                handler.setFormatter(formatter)
+                handler._focusflow_file = True
+                logger.addHandler(handler)
 
     def check_pygame_events(self) -> None:
         """
@@ -194,19 +210,14 @@ class PomodoroApp:
         bak1_path = db_path + ".bak1"
         bak2_path = db_path + ".bak2"
         
-        # Setup basic logging
-        logging.basicConfig(filename=str(self.paths.logs_dir / 'backup.log'),
-                            level=logging.INFO, 
-                            format='%(asctime)s - %(levelname)s - %(message)s')
-
         try:
             if not os.path.exists(db_path):
-                logging.warning(f"Database not found at {db_path}. Skipping backup.")
+                BACKUP_LOGGER.warning(f"Database not found at {db_path}. Skipping backup.")
                 return
 
             # Check if backup is needed (compare with bak1)
             if os.path.exists(bak1_path) and filecmp.cmp(db_path, bak1_path, shallow=False):
-                logging.info("Database unchanged since last backup. Skipping backup.")
+                BACKUP_LOGGER.info("Database unchanged since last backup. Skipping backup.")
                 return
 
             # Proceed with rolling backup
@@ -214,21 +225,21 @@ class PomodoroApp:
                 try:
                     os.remove(bak2_path)
                 except OSError as e:
-                    logging.error(f"Failed to remove old backup {bak2_path}: {e}")
+                    BACKUP_LOGGER.error(f"Failed to remove old backup {bak2_path}: {e}")
             
             if os.path.exists(bak1_path):
                 try:
                     os.rename(bak1_path, bak2_path)
                 except OSError as e:
-                     logging.error(f"Failed to rotate backup {bak1_path} to {bak2_path}: {e}")
+                     BACKUP_LOGGER.error(f"Failed to rotate backup {bak1_path} to {bak2_path}: {e}")
 
             shutil.copy2(db_path, bak1_path)
-            logging.info(f"Backup successful: {bak1_path} created.")
+            BACKUP_LOGGER.info(f"Backup successful: {bak1_path} created.")
             
         except Exception as e:
             error_msg = f"Critical error during database backup: {e}"
             print(error_msg)
-            logging.error(error_msg)
+            BACKUP_LOGGER.error(error_msg)
 
     def setup_window_properties(self) -> None:
         """Sets window properties like 'Always on Top' based on configuration."""
@@ -360,6 +371,7 @@ class PomodoroApp:
         tabs.pack(fill="both", expand=True, padx=18, pady=(18, 8))
         general_tab = tabs.add("常规")
         interruption_tab = tabs.add("中断选项")
+        feedback_tab = tabs.add("Session Feedback")
         body = ctk.CTkScrollableFrame(general_tab, fg_color="transparent")
         body.pack(fill="both", expand=True, padx=2, pady=2)
         preferences = self.preferences
@@ -562,6 +574,88 @@ class PomodoroApp:
         refresh_categories()
         refresh_reasons()
 
+        ctk.CTkLabel(feedback_tab, text="管理会话结束时显示的情绪选项及其评分；操作会立即保存。",
+                     anchor="w").pack(fill="x", padx=12, pady=(10, 8))
+        feedback_body = ctk.CTkFrame(feedback_tab, fg_color="transparent")
+        feedback_body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        feedback_body.grid_columnconfigure(0, weight=3)
+        feedback_body.grid_columnconfigure(1, weight=1)
+        feedback_body.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(feedback_body, text="情绪选项", font=(FONT_NAME, 14, "bold")).grid(
+            row=0, column=0, sticky="w", padx=6, pady=4
+        )
+        ctk.CTkLabel(feedback_body, text="评分（1–10）", font=(FONT_NAME, 14, "bold")).grid(
+            row=0, column=1, sticky="w", padx=6, pady=4
+        )
+        feedback_list = ctk.CTkScrollableFrame(feedback_body, height=300)
+        feedback_list.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=0)
+        feedback_actions = ctk.CTkFrame(feedback_body, fg_color="transparent")
+        feedback_actions.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+
+        def refresh_feedback():
+            for widget in feedback_list.winfo_children():
+                widget.destroy()
+            moods = self.config_manager.get_feedback_moods()
+            if not moods:
+                ctk.CTkLabel(feedback_list, text="暂无情绪选项。\n至少需要保留一项。\n").pack(pady=20)
+                return
+            for mood in moods:
+                row = ctk.CTkFrame(feedback_list, fg_color="transparent")
+                row.pack(fill="x", pady=2)
+                ctk.CTkLabel(row, text=mood.get("name", ""), anchor="w").pack(
+                    side="left", fill="x", expand=True, padx=4
+                )
+                ctk.CTkLabel(row, text=str(mood.get("score", 5)), width=70).pack(side="left")
+                ctk.CTkButton(row, text="修改", width=48,
+                              command=lambda item=mood: edit_feedback(item)).pack(side="right", padx=2)
+                ctk.CTkButton(row, text="删", width=36,
+                              command=lambda item=mood: delete_feedback(item)).pack(side="right", padx=2)
+
+        def add_feedback():
+            name = simpledialog.askstring("新增反馈情绪", "情绪名称：", parent=dialog)
+            if name is None:
+                return
+            score = simpledialog.askinteger("新增反馈情绪", "评分（1–10）：", minvalue=1, maxvalue=10, parent=dialog)
+            if score is None:
+                return
+            try:
+                self.config_manager.add_feedback_mood(name, score)
+                refresh_feedback()
+                set_interruption_status("反馈情绪已新增并保存。")
+            except ValueError as error:
+                set_interruption_status(f"操作失败：{error}")
+
+        def edit_feedback(mood):
+            name = simpledialog.askstring("修改反馈情绪", "情绪名称：",
+                                          initialvalue=mood.get("name", ""), parent=dialog)
+            if name is None:
+                return
+            score = simpledialog.askinteger("修改反馈情绪", "评分（1–10）：",
+                                            initialvalue=mood.get("score", 5), minvalue=1, maxvalue=10,
+                                            parent=dialog)
+            if score is None:
+                return
+            try:
+                self.config_manager.update_feedback_mood(mood["id"], name, score)
+                refresh_feedback()
+                set_interruption_status("反馈情绪已修改并保存。")
+            except ValueError as error:
+                set_interruption_status(f"操作失败：{error}")
+
+        def delete_feedback(mood):
+            if not messagebox.askyesno("删除反馈情绪", f"删除“{mood.get('name', '')}”？\n历史记录不会受到影响。",
+                                       parent=dialog):
+                return
+            try:
+                self.config_manager.delete_feedback_mood(mood["id"])
+                refresh_feedback()
+                set_interruption_status("反馈情绪已删除并保存。")
+            except ValueError as error:
+                set_interruption_status(f"操作失败：{error}")
+
+        ctk.CTkButton(feedback_actions, text="新增情绪", command=add_feedback).pack(side="left", padx=2)
+        refresh_feedback()
+
         status = ctk.CTkLabel(dialog, text="", text_color=ThemeManager.get_color("danger"), anchor="w")
         status.pack(fill="x", padx=18, pady=(0, 4))
         buttons = ctk.CTkFrame(dialog, fg_color="transparent")
@@ -735,14 +829,14 @@ class PomodoroApp:
                 for _ in range(20):
                     if self.goalsifter_client.is_tunnel_ready():
                         result = operation()
-                        self.root.after(0, lambda: on_success(result))
+                        self.root.after(0, lambda result=result: on_success(result))
                         return
                     if self.goalsifter_tunnel.poll() is not None:
                         break
                     time.sleep(0.25)
                 raise GoalSifterRemoteError(0, "GoalSifter 隧道连接超时")
             except Exception as error:
-                self.root.after(0, lambda: on_failure(error))
+                self.root.after(0, lambda error=error: on_failure(error))
 
         try:
             self._goalsifter_executor.submit(run)
@@ -903,20 +997,54 @@ class PomodoroApp:
             return
         self._goalsifter_sync_in_flight = True
 
-        def on_timeout(message: str) -> None:
-            self._goalsifter_sync_in_flight = False
-            self.ui.refresh_goalsifter_focus_items([], f"无法同步 Outbox：{message}")
-            self._schedule_goalsifter_retry()
-
-        try:
-            if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
-                self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
-                self.ui.refresh_goalsifter_focus_items([], "正在连接 GoalSifter 并同步 Outbox…")
-            self._await_goalsifter_ready(self._sync_pending_goalsifter_events, on_timeout)
-        except (GoalSifterRemoteError, OSError) as error:
+        def on_failure(error: Exception) -> None:
             self._goalsifter_sync_in_flight = False
             self.ui.refresh_goalsifter_focus_items([], f"无法同步 Outbox：{error}")
             self._schedule_goalsifter_retry()
+
+        self.ui.refresh_goalsifter_focus_items(
+            self.data_manager.get_goalsifter_focus_items(), "正在连接 GoalSifter 并同步 Outbox…"
+        )
+        pending_events = self.data_manager.get_pending_focusflow_events()
+        self._submit_goalsifter_operation(
+            lambda: self._sync_pending_goalsifter_events(pending_events),
+            self._finish_goalsifter_outbox_sync,
+            on_failure,
+        )
+
+    def _finish_goalsifter_outbox_sync(self, result: dict) -> None:
+        """Apply worker-produced Outbox results on the Tk/database thread."""
+        synced_events = result.get("synced", [])
+        for event in synced_events:
+            self.data_manager.mark_focusflow_event_synced(event["event_id"])
+
+        failure = result.get("failure")
+        if failure is not None:
+            event = result["failed_event"]
+            error = failure["error"]
+            if failure["conflict"]:
+                self.data_manager.mark_focusflow_event_conflict(event["event_id"], str(error))
+                self._goalsifter_sync_in_flight = False
+                self.ui.refresh_goalsifter_focus_items(
+                    self.data_manager.get_goalsifter_focus_items(),
+                    f"已同步 {len(synced_events)} 条；发现事件冲突，已暂停该事件：{error}",
+                )
+                return
+            self.data_manager.record_focusflow_event_error(event["event_id"], str(error))
+            self._goalsifter_sync_in_flight = False
+            self.ui.refresh_goalsifter_focus_items(
+                self.data_manager.get_goalsifter_focus_items(),
+                f"已同步 {len(synced_events)} 条；其余保留待同步：{error}",
+            )
+            self._schedule_goalsifter_retry()
+            return
+
+        self._goalsifter_sync_in_flight = False
+        self._goalsifter_retry_delay = 1
+        self.ui.refresh_goalsifter_focus_items(
+            self.data_manager.get_goalsifter_focus_items(),
+            f"已同步 {len(synced_events)} 条 Outbox 事件。",
+        )
 
     def _schedule_goalsifter_retry(self) -> None:
         """Retry transient delivery failures without blocking the Tk event loop."""
@@ -965,60 +1093,49 @@ class PomodoroApp:
         if not self.goalsifter_settings.is_configured:
             messagebox.showwarning("GoalSifter 未配置", "请先配置 SSH alias 与 Bearer token。")
             return
-        def do_create() -> None:
+        project_name = self.current_project
+        task_name = self.current_task
+        estimate = self.current_task_estimate
+        device_id = self.goalsifter_settings.device_id
+
+        def create_remote_task():
+            return self.goalsifter_client.create_dw_task(task_name, estimate)
+
+        def on_created(result: dict) -> None:
             try:
-                result = self.goalsifter_client.create_dw_task(self.current_task, self.current_task_estimate)
-                item = self.data_manager.ensure_focus_item(self.current_project, self.current_task)
-                self.data_manager.bind_focus_item(item['local_id'], result['task_id'], self.goalsifter_settings.device_id)
+                item = self.data_manager.ensure_focus_item(project_name, task_name)
+                self.data_manager.bind_focus_item(
+                    item['local_id'], result['task_id'], device_id
+                )
                 self.reset_state_and_ui()
                 messagebox.showinfo("已创建并绑定", "新 DW 已创建；历史番茄需要由你手动同步。")
-            except GoalSifterRemoteError as error:
-                if error.status_code == 422:
-                    messagebox.showwarning("需要澄清", "GoalSifter 拒绝创建该任务，请回 TTC/GoalSifter 完成澄清后再绑定。")
-                else:
-                    messagebox.showerror("创建失败", f"GoalSifter 不可用：{error}")
+            except Exception as error:
+                messagebox.showerror("绑定失败", f"本地绑定失败：{error}")
 
-        def on_timeout(message: str) -> None:
-            messagebox.showerror("创建失败", f"GoalSifter 不可用：{message}")
+        def on_failed(error: Exception) -> None:
+            if isinstance(error, GoalSifterRemoteError) and error.status_code == 422:
+                messagebox.showwarning("需要澄清", "GoalSifter 拒绝创建该任务，请回 TTC/GoalSifter 完成澄清后再绑定。")
+            else:
+                messagebox.showerror("创建失败", f"GoalSifter 不可用：{error}")
 
-        try:
-            if self.goalsifter_tunnel is None or self.goalsifter_tunnel.poll() is not None:
-                self.goalsifter_tunnel = self.goalsifter_client.start_tunnel()
-            self._await_goalsifter_ready(do_create, on_timeout)
-        except (GoalSifterRemoteError, OSError) as error:
-            messagebox.showerror("创建失败", f"GoalSifter 不可用：{error}")
+        self._submit_goalsifter_operation(create_remote_task, on_created, on_failed)
 
-    def _sync_pending_goalsifter_events(self) -> None:
-        synced = 0
-        for event in self.data_manager.get_pending_focusflow_events():
+    def _sync_pending_goalsifter_events(self, pending_events: list[dict]) -> dict:
+        """Send Outbox events in the worker and return only serializable results."""
+        synced = []
+        for event in pending_events:
             try:
                 result = self.goalsifter_client.post_pomo_event(event)
                 if result.get('event_id') != event['event_id'] or 'duplicate' not in result:
                     raise GoalSifterRemoteError(502, "GoalSifter returned an invalid event acknowledgement")
-                self.data_manager.mark_focusflow_event_synced(event['event_id'])
-                synced += 1
+                synced.append(event)
             except GoalSifterRemoteError as error:
-                if error.status_code == 409:
-                    self.data_manager.mark_focusflow_event_conflict(event['event_id'], str(error))
-                    self._goalsifter_sync_in_flight = False
-                    self.ui.refresh_goalsifter_focus_items(
-                        self.data_manager.get_goalsifter_focus_items(),
-                        f"已同步 {synced} 条；发现事件冲突，已暂停该事件：{error}",
-                    )
-                    return
-                self.data_manager.record_focusflow_event_error(event['event_id'], str(error))
-                self._goalsifter_sync_in_flight = False
-                self.ui.refresh_goalsifter_focus_items(
-                    self.data_manager.get_goalsifter_focus_items(),
-                    f"已同步 {synced} 条；其余保留待同步：{error}",
-                )
-                self._schedule_goalsifter_retry()
-                return
-        self._goalsifter_sync_in_flight = False
-        self._goalsifter_retry_delay = 1
-        self.ui.refresh_goalsifter_focus_items(
-            self.data_manager.get_goalsifter_focus_items(), f"已同步 {synced} 条 Outbox 事件。"
-        )
+                return {
+                    "synced": synced,
+                    "failed_event": event,
+                    "failure": {"error": error, "conflict": error.status_code == 409},
+                }
+        return {"synced": synced, "failure": None}
 
     def show_local_task_manager(self) -> None:
         """Manage local projects and their tasks without touching GoalSifter KR data."""

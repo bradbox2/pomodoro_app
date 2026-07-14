@@ -5,8 +5,7 @@ import uuid
 import logging
 from typing import Dict, List, Any
 
-# Ensure we have logging setup
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+LOGGER = logging.getLogger("focusflow.app")
 
 class ConfigHistoryManager:
     HISTORY_FILE = "config_history.json"
@@ -26,7 +25,7 @@ class ConfigHistoryManager:
             with open(self.history_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
-            logging.error(f"Error loading config history: {e}")
+            LOGGER.error(f"Error loading config history: {e}")
             return {"aliases": {}, "snapshot": {}}
 
     def save_history(self):
@@ -34,7 +33,7 @@ class ConfigHistoryManager:
             with open(self.history_path, 'w', encoding='utf-8') as f:
                 json.dump(self.history, f, indent=4)
         except Exception as e:
-            logging.error(f"Error saving config history: {e}")
+            LOGGER.error(f"Error saving config history: {e}")
 
     def get_aliases(self, current_name: str) -> List[str]:
         """
@@ -149,7 +148,7 @@ class ConfigHistoryManager:
                     # Prompt says "stop comparison against old data".
                     # So essentially, treat as fresh.
                     if uid in self.history['aliases']:
-                        logging.info(f"Location change detected for {name} (was {old_name} at {old_cat}:{old_idx}). Clearing history.")
+                        LOGGER.info(f"Location change detected for {name} (was {old_name} at {old_cat}:{old_idx}). Clearing history.")
                         del self.history['aliases'][uid]
                         
                 elif name != old_name:
@@ -159,7 +158,7 @@ class ConfigHistoryManager:
                     
                     if old_name not in self.history['aliases'][uid]:
                          self.history['aliases'][uid].append(old_name)
-                         logging.info(f"Rename detected: {old_name} -> {name}. Added alias.")
+                         LOGGER.info(f"Rename detected: {old_name} -> {name}. Added alias.")
 
         # Save
         self.history['snapshot'] = new_snapshot

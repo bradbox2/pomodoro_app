@@ -7,7 +7,7 @@ from focusflow.pomodoro_data_manager import PomodoroDataManager
 
 def test_rename_project_preserves_tasks_focus_items_and_sessions(tmp_path):
     manager = PomodoroDataManager(str(tmp_path), "focusflow.db")
-    manager.add_or_update_task("Legacy", "Prepare brief", 8)
+    manager.add_or_update_task("Legacy", "Prepare brief", 4)
     manager.record_session({
         "project_name": "Legacy", "task_name": "Prepare brief", "session_type": "Work",
         "start_time": datetime(2026, 7, 12, 9), "end_time": datetime(2026, 7, 12, 9, 25),

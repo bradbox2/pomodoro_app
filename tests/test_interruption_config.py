@@ -65,6 +65,45 @@ def test_interruption_categories_and_reasons_can_be_deleted_and_leave_empty_cate
     assert "External" not in manager.get_interruption_reasons()
 
 
+def test_feedback_moods_can_be_managed_without_losing_ids_or_alias_history(tmp_path):
+    manager = AppConfigManager(tmp_path / "config.json")
+
+    mood = manager.add_feedback_mood("专注", 8)
+    renamed = manager.update_feedback_mood(mood["id"], "深度专注", 9)
+
+    assert renamed == {"id": mood["id"], "name": "深度专注", "score": 9}
+    assert manager.get_feedback_moods()[-1] == renamed
+    assert "专注" in manager.history_manager.get_aliases("深度专注")
+
+    manager.delete_feedback_mood(mood["id"])
+    assert all(item["id"] != mood["id"] for item in manager.get_feedback_moods())
+
+
+@pytest.mark.parametrize("operation", [
+    lambda manager: manager.add_feedback_mood(" ", 5),
+    lambda manager: manager.add_feedback_mood("重复", 0),
+    lambda manager: manager.add_feedback_mood("重复", 11),
+    lambda manager: manager.update_feedback_mood("default-mood-1", " ", 5),
+])
+def test_feedback_editor_rejects_invalid_values(tmp_path, operation):
+    manager = AppConfigManager(tmp_path / "config.json")
+
+    with pytest.raises(ValueError):
+        operation(manager)
+
+
+def test_feedback_editor_rejects_duplicate_names_and_deleting_last_mood(tmp_path):
+    manager = AppConfigManager(tmp_path / "config.json")
+
+    with pytest.raises(ValueError):
+        manager.add_feedback_mood(" Excited ", 5)
+
+    for mood in list(manager.get_feedback_moods())[1:]:
+        manager.delete_feedback_mood(mood["id"])
+    with pytest.raises(ValueError):
+        manager.delete_feedback_mood(manager.get_feedback_moods()[0]["id"])
+
+
 @pytest.mark.parametrize("operation", [
     lambda manager: manager.add_interruption_category(" "),
     lambda manager: manager.rename_interruption_category("External", " "),

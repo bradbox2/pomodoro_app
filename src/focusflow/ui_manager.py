@@ -28,9 +28,9 @@ def parse_focus_estimate(raw: str) -> int:
     try:
         estimate = int(raw.strip())
     except (AttributeError, ValueError):
-        raise ValueError("Focus item estimate must be between 1 and 99") from None
-    if not 1 <= estimate <= 99:
-        raise ValueError("Focus item estimate must be between 1 and 99")
+        raise ValueError("Focus item estimate must be between 1 and 4") from None
+    if not 1 <= estimate <= 4:
+        raise ValueError("Focus item estimate must be between 1 and 4")
     return estimate
 
 # --- Pygame Widget (Refactored) ---
@@ -391,8 +391,11 @@ class UIManager:
         self.daily_checkmarks_frame.grid(row=2, column=0, pady=(2,0))
         self.status_bar_frame = ctk.CTkFrame(self.root, fg_color="transparent")
         self.status_bar_frame.grid(row=3, column=0, pady=(2,0), sticky="ew")
-        self.quick_start_frame = ctk.CTkFrame(self.setup_view_frame, fg_color="transparent")
-        self.quick_start_frame.grid(row=6, column=0, columnspan=3, pady=(10,0))
+        self.setup_action_frame = ctk.CTkFrame(self.setup_view_frame, fg_color="transparent")
+        self.setup_action_frame.grid(row=6, column=0, columnspan=3, pady=(10,0))
+        self.quick_start_frame = ctk.CTkFrame(self.setup_action_frame, fg_color="transparent")
+        self.quick_start_frame.pack(fill="x")
+        self.goalsifter_actions_frame = ctk.CTkFrame(self.setup_action_frame, fg_color="transparent")
 
     def _create_card_frame(self, parent):
         """Create a card-style container with CustomTkinter styling"""
@@ -419,7 +422,7 @@ class UIManager:
                                        border_width=0)
         pygame_container.grid(row=1, column=0, pady=PADDING_MEDIUM)
         
-        self.pygame_widget = PygameTimerWidget(pygame_container, width=170, height=170,
+        self.pygame_widget = PygameTimerWidget(pygame_container, width=260, height=200,
                                               bg_color=ThemeManager.get_color("bg"))
         self.pygame_widget.pack(padx=0, pady=0)
         
@@ -521,7 +524,9 @@ class UIManager:
         # Project/Task Input Card
         self.input_card, input_inner = self._create_card_frame(self.setup_view_frame)
         self.input_card.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, PADDING_MEDIUM))
-        self.task_source_tabs = ctk.CTkTabview(input_inner, height=330)
+        self.task_source_tabs = ctk.CTkTabview(
+            input_inner, height=330, command=self._on_task_source_changed
+        )
         self.task_source_tabs.pack(fill="both", expand=True)
         editor_tab = self.task_source_tabs.add("本地任务")
         goalsifter_tab = self.task_source_tabs.add("GoalSifter 任务")
@@ -542,18 +547,27 @@ class UIManager:
             font=(FONT_NAME, 11), justify="left",
         )
         self.goalsifter_status_label.pack(anchor="w", pady=(2, 8))
+
+        ctk.CTkLabel(
+            self.goalsifter_actions_frame, text="GoalSifter 操作:",
+            font=(FONT_NAME, 11, "bold"),
+        ).pack(anchor="w", pady=(PADDING_SMALL, PADDING_SMALL))
+        goalsifter_action_buttons = ctk.CTkFrame(
+            self.goalsifter_actions_frame, fg_color="transparent"
+        )
+        goalsifter_action_buttons.pack()
         ctk.CTkButton(
-            self.goalsifter_focus_list, text="刷新 GoalSifter 任务", height=28,
+            goalsifter_action_buttons, text="刷新 GoalSifter 任务", width=130, height=28,
             command=self.goalsifter_refresh_callback,
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(side="left", padx=3)
         ctk.CTkButton(
-            self.goalsifter_focus_list, text="手动同步 Outbox", height=28,
+            goalsifter_action_buttons, text="手动同步 Outbox", width=120, height=28,
             command=self.goalsifter_sync_callback,
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(side="left", padx=3)
         ctk.CTkButton(
-            self.goalsifter_focus_list, text="⚙ 连接设置", height=28,
+            goalsifter_action_buttons, text="⚙ 连接设置", width=105, height=28,
             command=self.goalsifter_settings_callback,
-        ).pack(anchor="w", pady=(0, 8))
+        ).pack(side="left", padx=3)
         
         # Project section
         ctk.CTkLabel(editor_tab, text="本地分类（可选）:",
@@ -630,6 +644,17 @@ class UIManager:
                                            font=(FONT_NAME, 9), 
                                            text_color="#888888")
         self.db_status_label.pack(anchor="w")
+
+        self._on_task_source_changed()
+
+    def _on_task_source_changed(self, *_args):
+        """Show only the actions relevant to the selected task source."""
+        if self.task_source_tabs.get() == "GoalSifter 任务":
+            self.quick_start_frame.pack_forget()
+            self.goalsifter_actions_frame.pack(fill="x")
+        else:
+            self.goalsifter_actions_frame.pack_forget()
+            self.quick_start_frame.pack(fill="x")
 
     def update_quick_start_buttons(self, recent_tasks):
         for widget in self.quick_start_frame.winfo_children(): widget.destroy()
@@ -761,18 +786,6 @@ class UIManager:
             text=status_text or "仅显示活跃 DW；任务编辑与完成请回 GoalSifter。",
             font=(FONT_NAME, 11), justify="left",
         ).pack(anchor="w", pady=(2, 8))
-        ctk.CTkButton(
-            self.goalsifter_focus_list, text="刷新 GoalSifter 任务", height=28,
-            command=self.goalsifter_refresh_callback,
-        ).pack(anchor="w", pady=(0, 8))
-        ctk.CTkButton(
-            self.goalsifter_focus_list, text="手动同步 Outbox", height=28,
-            command=self.goalsifter_sync_callback,
-        ).pack(anchor="w", pady=(0, 8))
-        ctk.CTkButton(
-            self.goalsifter_focus_list, text="⚙ 连接设置", height=28,
-            command=self.goalsifter_settings_callback,
-        ).pack(anchor="w", pady=(0, 8))
         if not items:
             ctk.CTkLabel(self.goalsifter_focus_list, text="没有可选的活跃 DW。", font=(FONT_NAME, 11)).pack(pady=12)
             return

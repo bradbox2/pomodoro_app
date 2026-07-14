@@ -11,8 +11,8 @@ class AppConfigManager:
     CONFIG_FILE = "config.json"
 
     DEFAULT_PREFERENCES = {
-        "work_minutes": 2,
-        "short_break_minutes": 1,
+        "work_minutes": 25,
+        "short_break_minutes": 5,
         "long_break_minutes": 15,
         "long_break_interval": 4,
         "reset_long_break_on_restart": True,
@@ -298,7 +298,62 @@ class AppConfigManager:
 
     def get_feedback_moods(self):
         """Returns the list of mood options."""
-        return self.config.get("feedback", self.DEFAULT_CONFIG["feedback"]).get("moods", self.DEFAULT_CONFIG["feedback"]["moods"])
+        return deepcopy(self.config.get("feedback", self.DEFAULT_CONFIG["feedback"]).get(
+            "moods", self.DEFAULT_CONFIG["feedback"]["moods"]
+        ))
+
+    @staticmethod
+    def _require_feedback_score(score: int) -> int:
+        if isinstance(score, bool):
+            raise ValueError("Feedback score must be an integer between 1 and 10")
+        try:
+            score = int(score)
+        except (TypeError, ValueError):
+            raise ValueError("Feedback score must be an integer between 1 and 10") from None
+        if not 1 <= score <= 10:
+            raise ValueError("Feedback score must be an integer between 1 and 10")
+        return score
+
+    def _save_feedback_changes(self) -> None:
+        self.save_config(self.config)
+        self.history_manager.update_history(self.config)
+
+    def add_feedback_mood(self, name: str, score: int) -> dict:
+        name = self._require_name(name, "Feedback mood")
+        score = self._require_feedback_score(score)
+        moods = self.config.setdefault("feedback", {}).setdefault("moods", [])
+        if any(str(item.get("name", "")).strip().casefold() == name.casefold()
+               for item in moods if isinstance(item, dict)):
+            raise ValueError("Feedback mood already exists")
+        mood = {"name": name, "score": score, "id": str(uuid.uuid4())}
+        moods.append(mood)
+        self._save_feedback_changes()
+        return dict(mood)
+
+    def update_feedback_mood(self, mood_id: str, name: str, score: int) -> dict:
+        name = self._require_name(name, "Feedback mood")
+        score = self._require_feedback_score(score)
+        moods = self.config.setdefault("feedback", {}).setdefault("moods", [])
+        if any(str(item.get("name", "")).strip().casefold() == name.casefold()
+               and item.get("id") != mood_id for item in moods if isinstance(item, dict)):
+            raise ValueError("Feedback mood already exists")
+        for mood in moods:
+            if isinstance(mood, dict) and mood.get("id") == mood_id:
+                mood.update({"name": name, "score": score})
+                self._save_feedback_changes()
+                return dict(mood)
+        raise ValueError("Feedback mood not found")
+
+    def delete_feedback_mood(self, mood_id: str) -> None:
+        moods = self.config.setdefault("feedback", {}).setdefault("moods", [])
+        if len(moods) <= 1:
+            raise ValueError("At least one feedback mood is required")
+        for index, mood in enumerate(moods):
+            if isinstance(mood, dict) and mood.get("id") == mood_id:
+                del moods[index]
+                self._save_feedback_changes()
+                return
+        raise ValueError("Feedback mood not found")
 
     def get_aliases_for_name(self, name):
         """Bridge to history manager"""

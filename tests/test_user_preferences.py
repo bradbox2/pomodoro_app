@@ -16,8 +16,8 @@ def test_missing_preferences_use_timer_window_and_display_defaults(tmp_path):
     preferences = manager.get_preferences()
 
     assert preferences == {
-        "work_minutes": 2,
-        "short_break_minutes": 1,
+        "work_minutes": 25,
+        "short_break_minutes": 5,
         "long_break_minutes": 15,
         "long_break_interval": 4,
         "reset_long_break_on_restart": True,
@@ -39,7 +39,7 @@ def test_preferences_update_is_partial_and_persisted(tmp_path):
     reloaded = AppConfigManager(tmp_path / "config.json")
 
     assert updated["work_minutes"] == 25
-    assert updated["short_break_minutes"] == 1
+    assert updated["short_break_minutes"] == 5
     assert updated["theme_mode"] == "light"
     assert reloaded.get_preferences() == updated
 
@@ -70,7 +70,7 @@ def test_old_config_without_preferences_is_upgraded_without_losing_custom_sectio
     assert "Custom" in manager.get_interruption_reasons()
     assert manager.get_preferences()["theme_mode"] == "dark"
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["preferences"]["work_minutes"] == 2
+    assert saved["preferences"]["work_minutes"] == 25
 
 
 def test_invalid_config_root_falls_back_to_defaults_instead_of_crashing(tmp_path):
@@ -79,7 +79,7 @@ def test_invalid_config_root_falls_back_to_defaults_instead_of_crashing(tmp_path
 
     manager = AppConfigManager(config_path)
 
-    assert manager.get_preferences()["work_minutes"] == 2
+    assert manager.get_preferences()["work_minutes"] == 25
 
 
 def test_apply_preferences_updates_runtime_without_resetting_current_timer(monkeypatch):
@@ -90,7 +90,7 @@ def test_apply_preferences_updates_runtime_without_resetting_current_timer(monke
         "update_preferences": lambda _self, updates: {**app.preferences, **updates},
     })()
     app.timer = type("Timer", (), {
-        "settings": {"Work": 2, "Short Break": 1, "Long Break": 15},
+        "settings": {"Work": 25, "Short Break": 5, "Long Break": 15},
     })()
     root_calls = []
     app.root = type("Root", (), {
@@ -111,7 +111,7 @@ def test_apply_preferences_updates_runtime_without_resetting_current_timer(monke
     })
 
     assert result["work_minutes"] == 25
-    assert app.timer.settings == {"Work": 25, "Short Break": 1, "Long Break": 15}
+    assert app.timer.settings == {"Work": 25, "Short Break": 5, "Long Break": 15}
     assert app.is_running is True
     assert root_calls == [("-topmost", False), ("-alpha", 0.7)]
     assert theme_calls == ["light"]

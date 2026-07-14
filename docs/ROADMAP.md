@@ -64,6 +64,7 @@ FocusFlow 本机配置中显式更新它。
   - `GET /api/v1/focusflow/tasks` — 只读活跃 `dw` 快照。响应为 `{"tasks":[...]}` 信封（客户端解包后取列表，见 2026-07-13 实机联通说明）；每项含 `task_id`、`task_name`、`kr_ref`、`pomo_estimate`、`pomo_count`、`status`、`created_at`、`last_event_at`。契约不含 `updated_at`；新鲜度以 `last_event_at` 判断。
   - `POST /api/v1/focusflow/pomo-events` — 事件字段：`event_id`、`device_id`、`task_id`、`started_at`、`ended_at`、`duration_minutes`、`status`（当前仅接受 `"completed"`）。响应：`{event_id, duplicate, task_id, pomo_count, exp_awarded}`；同一 `event_id` 重放返回 200 + `duplicate: true` + 当前 `pomo_count`，不重复计分。
   - `POST /api/v1/focusflow/tasks` — 显式创建 DW：`{name, pomo_estimate?}`。评级由服务端规则决定，请求不携带 filters/rating；任务名未通过服务端校验 → 422，客户端须提示用户回 GoalSifter（飞书/TTC）完成澄清后再绑定，不得在桌面端旁路。
+  - `POST /api/v1/focusflow/tasks/{task_id}/complete` — 手动完成 active `dw`；不要求达到预估番茄数。响应包含 `task_id`、完成状态、`completed_at`、`exp_awarded` 与 `duplicate`；重复请求返回成功且不重复积分。
 - **认证**：每个请求带 `Authorization: Bearer <token>`；缺失/错误 → 401。
 - **拒绝与重试语义**：`ph` 任务、不存在的 task_id、非活跃任务 → 422。凡未收到 `duplicate: true` 成功响应的事件，客户端可用**同一 `event_id`** 安全重试，服务端保证不重复计分。
 - **网络边界**：公网侧对 `/api/v1/focusflow/` 一律 403；该前缀只能经 SSH 隧道访问，与本路线图的架构原则一致。
@@ -76,7 +77,8 @@ FocusFlow 本机配置中显式更新它。
 - 预估番茄数（`pomo_estimate`）契约范围 **1–4**，超出 422。本地草稿建议同口径（1–4），大任务在本地就引导拆分，避免同步时才冲突。预估不封顶实际完成数：超出预估的番茄照常上传、照常计分。
 - "当天完成了多少番茄"没有查询接口，也不需要：服务端从事件流自行派生统计；FocusFlow 界面显示当日数量时从本地会话记录自算。
 - 本地未绑定草稿的番茄**不产生服务端积分**（设计使然：只有进入 GoalSifter 的任务才计分）；绑定后补传的历史事件照常逐条计分，计入上传时所在的结算周期——跨周补传会把积分记到晚一周，介意就及时同步。
-- 任务的"完成"由用户在 GoalSifter 侧操作，FocusFlow 不触发任务完成（锁定）。
+- 任务的"完成"可由 GoalSifter/TTC 或 FocusFlow 手动触发；FocusFlow 只调用服务端完成接口，最终状态以服务端快照为准。
+- FocusFlow 在窗口获得焦点、重新可见及每 30 秒刷新 active DW 状态；服务器端完成的任务会从本地可启动列表归档。
 
 ## 第三阶段：办公室/家庭多客户端同步
 
