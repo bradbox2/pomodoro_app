@@ -18,6 +18,7 @@ from typing import Optional
 from focusflow.config import *
 from focusflow.ctk_theme_config import ThemeManager
 from focusflow.app_paths import AppPaths
+from focusflow.app_config_manager import AppConfigManager
 from focusflow.pomodoro_timer import PomodoroTimer
 from focusflow.pomodoro_data_manager import PomodoroDataManager
 from focusflow.sound_manager import SoundManager
@@ -54,13 +55,16 @@ class PomodoroApp:
         self.root = root
         self.root.report_callback_exception = self._report_callback_exception
         
-        # --- Initialize Theme System ---
-        ThemeManager.initialize(DEFAULT_THEME_MODE)
-        
         # --- Paths ---
         self.base_dir = get_base_path()
         self.paths = AppPaths.from_environment(Path(self.base_dir))
         self.paths.ensure_ready()
+        self.config_manager = AppConfigManager(self.paths.config_path)
+        self.preferences = self.config_manager.get_preferences()
+
+        # --- Initialize Theme System ---
+        ThemeManager.initialize(self.preferences["theme_mode"])
+
         self.data_dir = str(self.paths.data_dir)
         self.image_dir = os.path.join(self.base_dir, "images")
         self.sound_dir = os.path.join(self.base_dir, "sound")
@@ -94,7 +98,13 @@ class PomodoroApp:
         self.sound_manager = SoundManager(self.sound_dir) 
         
         self.analysis_manager = AnalysisManager(self.data_manager, self.paths.exports_dir, self.paths.config_path)
-        self.timer = PomodoroTimer(WORK_MIN, SHORT_BREAK_MIN, LONG_BREAK_MIN, self.update_timer_display, self.on_timer_finish)
+        self.timer = PomodoroTimer(
+            self.preferences["work_minutes"],
+            self.preferences["short_break_minutes"],
+            self.preferences["long_break_minutes"],
+            self.update_timer_display,
+            self.on_timer_finish,
+        )
         
         # --- UI ---
         all_projects = self.data_manager.get_local_project_names()
@@ -111,6 +121,7 @@ class PomodoroApp:
             self.delete_task_handler,
             self.handle_home_button,
             self.toggle_theme,  # New callback
+            self.open_settings_dialog,
             self.select_local_focus_item,
             self.refresh_goalsifter_tasks,
             self.sync_goalsifter_outbox,
@@ -123,6 +134,7 @@ class PomodoroApp:
             all_projects,
             self.sound_manager  # Pass sound_manager reference
         )
+        self.ui.apply_display_preferences(self.preferences)
         
         # --- State ---
         self.is_running = False
@@ -220,7 +232,7 @@ class PomodoroApp:
 
     def setup_window_properties(self) -> None:
         """Sets window properties like 'Always on Top' based on configuration."""
-        self.root.attributes('-topmost', False)
+        self.root.attributes('-topmost', self.preferences["always_on_top"])
 
     def _truncate_text(self, text: str, max_length: int = 20) -> str:
         """Truncates text with ellipsis if it exceeds max_length."""
@@ -332,7 +344,124 @@ class PomodoroApp:
 
     def toggle_theme(self) -> None:
         """Toggles between Light and Dark visual modes."""
-        ThemeManager.toggle()
+        mode = ThemeManager.toggle()
+        if hasattr(self, "config_manager"):
+            self.preferences = self.config_manager.update_preferences({"theme_mode": mode})
+
+    def open_settings_dialog(self) -> None:
+        """Open the user-facing settings window."""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("FocusFlow 设置")
+        dialog.geometry("620x650")
+        dialog.minsize(560, 580)
+        dialog.transient(self.root)
+
+        body = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=18, pady=(18, 8))
+        preferences = self.preferences
+        fields = {}
+
+        def add_section(title: str, description: str):
+            card = ctk.CTkFrame(body, corner_radius=10)
+            card.pack(fill="x", pady=(0, 12))
+            ctk.CTkLabel(card, text=title, font=(FONT_NAME, 16, "bold")).pack(anchor="w", padx=14, pady=(12, 2))
+            ctk.CTkLabel(card, text=description, justify="left", anchor="w").pack(fill="x", padx=14, pady=(0, 10))
+            return card
+
+        def add_number(card, row, label, key):
+            line = ctk.CTkFrame(card, fg_color="transparent")
+            line.pack(fill="x", padx=14, pady=4)
+            ctk.CTkLabel(line, text=label, anchor="w").pack(side="left", fill="x", expand=True)
+            variable = StringVar(value=str(preferences[key]))
+            fields[key] = variable
+            ctk.CTkEntry(line, textvariable=variable, width=100).pack(side="right")
+
+        timer_card = add_section("计时", "调整下一次工作和休息周期；当前正在进行的计时不会被重置。")
+        add_number(timer_card, 0, "工作时长（分钟）", "work_minutes")
+        add_number(timer_card, 1, "短休息时长（分钟）", "short_break_minutes")
+        add_number(timer_card, 2, "长休息时长（分钟）", "long_break_minutes")
+        add_number(timer_card, 3, "几次工作后进入长休息", "long_break_interval")
+        add_number(timer_card, 4, "每隔几次请求反馈（0 为关闭）", "feedback_interval")
+        reset_var = BooleanVar(value=preferences["reset_long_break_on_restart"])
+        fields["reset_long_break_on_restart"] = reset_var
+        ctk.CTkCheckBox(timer_card, text="应用重启后重置长休息计数", variable=reset_var).pack(anchor="w", padx=14, pady=(6, 12))
+
+        window_card = add_section("窗口", "控制 FocusFlow 窗口在桌面上的行为。")
+        topmost_var = BooleanVar(value=preferences["always_on_top"])
+        fields["always_on_top"] = topmost_var
+        ctk.CTkCheckBox(window_card, text="窗口总在最前", variable=topmost_var).pack(anchor="w", padx=14, pady=4)
+        transparency_var = StringVar(value=f"{int(preferences['focused_transparency'] * 100)}%")
+        fields["focused_transparency"] = transparency_var
+        transparency_line = ctk.CTkFrame(window_card, fg_color="transparent")
+        transparency_line.pack(fill="x", padx=14, pady=(4, 12))
+        ctk.CTkLabel(transparency_line, text="计时期间窗口透明度").pack(side="left", fill="x", expand=True)
+        ctk.CTkOptionMenu(transparency_line, variable=transparency_var,
+                          values=[f"{value}%" for value in range(50, 101, 5)], width=100).pack(side="right")
+
+        display_card = add_section("显示", "主题、动画和字体大小会立即应用。")
+        theme_var = StringVar(value=preferences["theme_mode"])
+        fields["theme_mode"] = theme_var
+        theme_line = ctk.CTkFrame(display_card, fg_color="transparent")
+        theme_line.pack(fill="x", padx=14, pady=4)
+        ctk.CTkLabel(theme_line, text="主题").pack(side="left", fill="x", expand=True)
+        ctk.CTkOptionMenu(theme_line, variable=theme_var, values=["dark", "light"], width=100).pack(side="right")
+        animation_var = BooleanVar(value=preferences["enable_animations"])
+        fields["enable_animations"] = animation_var
+        ctk.CTkCheckBox(display_card, text="启用计时动画", variable=animation_var).pack(anchor="w", padx=14, pady=4)
+        scale_var = StringVar(value=f"{int(preferences['font_size_scale'] * 100)}%")
+        fields["font_size_scale"] = scale_var
+        scale_line = ctk.CTkFrame(display_card, fg_color="transparent")
+        scale_line.pack(fill="x", padx=14, pady=(4, 12))
+        ctk.CTkLabel(scale_line, text="字体缩放").pack(side="left", fill="x", expand=True)
+        ctk.CTkOptionMenu(scale_line, variable=scale_var,
+                          values=[f"{value}%" for value in range(80, 151, 10)], width=100).pack(side="right")
+
+        status = ctk.CTkLabel(dialog, text="", text_color=ThemeManager.get_color("danger"), anchor="w")
+        status.pack(fill="x", padx=18, pady=(0, 4))
+        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+        buttons.pack(fill="x", padx=18, pady=(0, 16))
+
+        def save():
+            try:
+                updates = {
+                    "work_minutes": int(fields["work_minutes"].get()),
+                    "short_break_minutes": int(fields["short_break_minutes"].get()),
+                    "long_break_minutes": int(fields["long_break_minutes"].get()),
+                    "long_break_interval": int(fields["long_break_interval"].get()),
+                    "feedback_interval": int(fields["feedback_interval"].get()),
+                    "reset_long_break_on_restart": bool(fields["reset_long_break_on_restart"].get()),
+                    "always_on_top": bool(fields["always_on_top"].get()),
+                    "focused_transparency": int(fields["focused_transparency"].get().rstrip("%")) / 100,
+                    "theme_mode": fields["theme_mode"].get(),
+                    "enable_animations": bool(fields["enable_animations"].get()),
+                    "font_size_scale": int(fields["font_size_scale"].get().rstrip("%")) / 100,
+                }
+                self.apply_preferences(updates)
+                dialog.destroy()
+            except (TypeError, ValueError, OSError) as error:
+                status.configure(text=f"保存失败：{error}")
+
+        ctk.CTkButton(buttons, text="取消", width=90, command=dialog.destroy).pack(side="right")
+        ctk.CTkButton(buttons, text="保存", width=90, command=save).pack(side="right", padx=(0, 8))
+        dialog.protocol("WM_DELETE_WINDOW", dialog.destroy)
+
+    def apply_preferences(self, updates: dict) -> dict:
+        """Persist user preferences and apply changes without resetting a session."""
+        preferences = self.config_manager.update_preferences(updates)
+        self.preferences = preferences
+        ThemeManager.set_mode(preferences["theme_mode"])
+        self.root.attributes("-topmost", preferences["always_on_top"])
+        if self.is_running:
+            self.root.attributes("-alpha", preferences["focused_transparency"])
+        else:
+            self.root.attributes("-alpha", 1.0)
+        self.timer.settings.update({
+            "Work": preferences["work_minutes"],
+            "Short Break": preferences["short_break_minutes"],
+            "Long Break": preferences["long_break_minutes"],
+        })
+        self.ui.apply_display_preferences(preferences)
+        return preferences
 
     def show_analysis_dialog(self) -> None:
         """Displays the analysis date range selection dialog."""
@@ -910,7 +1039,7 @@ class PomodoroApp:
             self.ui.pygame_widget.update_display()
         
         if self.current_session_type == 'Work':
-            self.root.attributes('-alpha', FOCUSED_TRANSPARENCY)
+            self.root.attributes('-alpha', self.preferences["focused_transparency"])
             self.current_project, self.current_task = project_name, task_name
             self.current_task_estimate = selected_estimate
             
@@ -987,7 +1116,7 @@ class PomodoroApp:
         self.ui.set_timer_mode("Idle")
         self.current_session_type = 'Work'
         self.ui.update_header(self._truncate_text(self.current_task or "Timer"), GREEN)
-        self.ui.update_timer_display(f"{WORK_MIN:02d}:00")
+        self.ui.update_timer_display(f"{self.preferences['work_minutes']:02d}:00")
 
     def update_progress_display(self) -> None:
         """Updates the visual progress bar and daily checkmarks."""
@@ -1024,7 +1153,8 @@ class PomodoroApp:
         
         if duration > 0:
             completed_count = self.data_manager.get_completed_work_sessions_for_task(self.current_project, self.current_task)
-            if completed_count == 0 or (FEEDBACK_INTERVAL > 0 and (completed_count + 1) % FEEDBACK_INTERVAL == 0):
+            feedback_interval = self.preferences["feedback_interval"]
+            if completed_count == 0 or (feedback_interval > 0 and (completed_count + 1) % feedback_interval == 0):
                 if self.root.state() == 'iconic':
                     self.root.deiconify()
                 feedback = FeedbackWindow(self.root, self.image_dir).get_feedback()
@@ -1052,14 +1182,15 @@ class PomodoroApp:
             self.root.after(0, self._sync_goalsifter_after_work)
             self.update_progress_display()
             
-            if RESET_LONG_BREAK_ON_RESTART:
+            if self.preferences["reset_long_break_on_restart"]:
                 key = (self.current_project, self.current_task)
                 self.local_session_counts[key] = self.local_session_counts.get(key, 0) + 1
                 completed_count = self.local_session_counts[key]
             else:
                 completed_count = self.data_manager.get_completed_work_sessions_for_task(self.current_project, self.current_task)
             
-            self.current_session_type = 'Long Break' if completed_count > 0 and completed_count % LONG_BREAK_INTERVAL == 0 else 'Short Break'
+            interval = self.preferences["long_break_interval"]
+            self.current_session_type = 'Long Break' if completed_count > 0 and completed_count % interval == 0 else 'Short Break'
             self.start_session(project_name=self.current_project, task_name=self.current_task)
         else: 
             self.data_manager.record_session({
