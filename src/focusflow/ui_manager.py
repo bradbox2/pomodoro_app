@@ -42,6 +42,7 @@ class PygameTimerWidget(tk.Frame):
         self.height = height
         self.bg_color = bg_color 
         self.time_text = "00:00"
+        self.animations_enabled = True
         
         # 1. 嵌入 Frame
         self.embed_frame = tk.Frame(self, width=width, height=height, bg=bg_color, borderwidth=0, relief='flat')
@@ -95,6 +96,9 @@ class PygameTimerWidget(tk.Frame):
         """Force refresh"""
         pass
 
+    def set_animations_enabled(self, enabled: bool):
+        self.animations_enabled = bool(enabled)
+
     def set_background_color(self, color):
         """Dynamically update background color"""
         self.bg_color = color
@@ -121,7 +125,7 @@ class PygameTimerWidget(tk.Frame):
         if not self.running: return
 
         # Update Logic
-        if self.effect and self.mode == "Work":
+        if self.effect and self.mode == "Work" and self.animations_enabled:
             self.effect.update()
         
         # Draw Logic
@@ -255,6 +259,7 @@ class UIManager:
                  delete_task_callback,
                  home_callback,
                  theme_toggle_callback,
+                 settings_callback,
                  focus_item_select_callback,
                  goalsifter_refresh_callback,
                  goalsifter_sync_callback,
@@ -276,6 +281,7 @@ class UIManager:
         self.delete_task_callback = delete_task_callback
         self.home_callback = home_callback
         self.theme_toggle_callback = theme_toggle_callback
+        self.settings_callback = settings_callback
         self.focus_item_select_callback = focus_item_select_callback
         self.goalsifter_refresh_callback = goalsifter_refresh_callback
         self.goalsifter_sync_callback = goalsifter_sync_callback
@@ -344,6 +350,8 @@ class UIManager:
         
         if hasattr(self, 'theme_btn'):
             self.theme_btn.configure(text_color=icon_color)
+        if hasattr(self, 'settings_btn'):
+            self.settings_btn.configure(text_color=icon_color)
             
         # 3. Update Input Card Background (Fix for "Black Box" in Light Mode)
         if hasattr(self, 'input_card'):
@@ -500,6 +508,13 @@ class UIManager:
                                       font=(FONT_NAME, 16),
                                       command=self._on_theme_toggle)
         self.theme_btn.place(relx=0.9, rely=0.0) # Top-right corner of the frame
+        self.settings_btn = ctk.CTkButton(self.setup_view_frame, text="⚙",
+                                          width=30, height=30,
+                                          fg_color="transparent",
+                                          hover_color=BUTTON_HOVER,
+                                          font=(FONT_NAME, 16),
+                                          command=self.settings_callback)
+        self.settings_btn.place(relx=0.95, rely=0.0)
         
         # Project/Task Input Card
         self.input_card, input_inner = self._create_card_frame(self.setup_view_frame)
@@ -792,6 +807,33 @@ class UIManager:
         """Passes the session mode to the Pygame widget to control particles"""
         if hasattr(self, 'pygame_widget'):
             self.pygame_widget.set_mode(mode)
+
+    def apply_display_preferences(self, preferences: dict):
+        """Apply display preferences without rebuilding the main window."""
+        if hasattr(self, "pygame_widget"):
+            self.pygame_widget.set_animations_enabled(preferences["enable_animations"])
+        self._apply_font_scale(preferences["font_size_scale"])
+
+    def _apply_font_scale(self, scale: float):
+        if not hasattr(self, "_base_fonts"):
+            self._base_fonts = {}
+
+        def visit(widget):
+            try:
+                font = widget.cget("font")
+                if widget not in self._base_fonts and isinstance(font, tuple):
+                    self._base_fonts[widget] = font
+                base = self._base_fonts.get(widget)
+                if base and len(base) >= 2 and isinstance(base[1], (int, float)):
+                    scaled = (base[0], max(1, int(abs(base[1]) * scale)), *base[2:])
+                    widget.configure(font=scaled)
+            except Exception:
+                pass
+            for child in widget.winfo_children():
+                visit(child)
+
+        visit(self.setup_view_frame)
+        visit(self.timer_view_frame)
 
     def _on_theme_toggle(self):
         """Wraps the callback to also update the button icon potentially"""

@@ -1,11 +1,26 @@
 import json
 import os
+import tempfile
 from pathlib import Path
 
 from focusflow.app_paths import AppPaths
 
 class AppConfigManager:
     CONFIG_FILE = "config.json"
+
+    DEFAULT_PREFERENCES = {
+        "work_minutes": 2,
+        "short_break_minutes": 1,
+        "long_break_minutes": 15,
+        "long_break_interval": 4,
+        "reset_long_break_on_restart": True,
+        "feedback_interval": 3,
+        "always_on_top": True,
+        "focused_transparency": 0.8,
+        "theme_mode": "dark",
+        "enable_animations": True,
+        "font_size_scale": 1.0,
+    }
     
     DEFAULT_CONFIG = {
         "interruptions": {
@@ -59,22 +74,33 @@ class AppConfigManager:
     def load_config(self):
         """Loads configuration from JSON file. Creates default if missing."""
         if not os.path.exists(self.config_path):
-            self.save_config(self.DEFAULT_CONFIG)
-            return self.DEFAULT_CONFIG
+            config = dict(self.DEFAULT_CONFIG)
+            config["preferences"] = dict(self.DEFAULT_PREFERENCES)
+            self.save_config(config)
+            return config
         
         try:
             with open(self.config_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
                 
             # AUTO-MIGRATION: Ensure all items have IDs
+            if not isinstance(data, dict):
+                raise ValueError("config root must be an object")
             modified = self._ensure_ids(data)
+            preferences = self._normalize_preferences(data.get("preferences"), strict=False)
+            if data.get("preferences") != preferences:
+                data["preferences"] = preferences
+                modified = True
             if modified:
                 self.save_config(data)
                 
             return data
-        except (json.JSONDecodeError, IOError) as e:
+        except (json.JSONDecodeError, IOError, ValueError) as e:
             print(f"Error loading config: {e}. Using default.")
-            return self.DEFAULT_CONFIG
+            fallback = dict(self.DEFAULT_CONFIG)
+            fallback["preferences"] = dict(self.DEFAULT_PREFERENCES)
+            self.save_config(fallback)
+            return fallback
 
     def _ensure_ids(self, config_data):
         """Injects UUIDs into config items if missing. Returns True if modified."""
@@ -110,11 +136,77 @@ class AppConfigManager:
 
     def save_config(self, config_data):
         """Saves configuration to JSON file."""
+        temp_path = None
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
+            with tempfile.NamedTemporaryFile(
+                mode="w", encoding="utf-8", dir=self.base_dir,
+                prefix=".config-", suffix=".tmp", delete=False,
+            ) as f:
                 json.dump(config_data, f, indent=4, ensure_ascii=False)
+                f.flush()
+                os.fsync(f.fileno())
+                temp_path = f.name
+            os.replace(temp_path, self.config_path)
         except IOError as e:
             print(f"Error saving config: {e}")
+            if temp_path:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+
+    @classmethod
+    def _normalize_preferences(cls, raw_preferences, *, strict: bool) -> dict:
+        preferences = dict(cls.DEFAULT_PREFERENCES)
+        if raw_preferences is None:
+            return preferences
+        if not isinstance(raw_preferences, dict):
+            if strict:
+                raise ValueError("preferences must be an object")
+            return preferences
+
+        unknown = set(raw_preferences) - set(cls.DEFAULT_PREFERENCES)
+        if unknown and strict:
+            raise ValueError(f"Unknown preferences: {', '.join(sorted(unknown))}")
+
+        for key, value in raw_preferences.items():
+            if key not in preferences:
+                continue
+            if key in {"work_minutes", "long_break_minutes"}:
+                valid = isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 120
+            elif key == "short_break_minutes":
+                valid = isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 60
+            elif key == "long_break_interval":
+                valid = isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 12
+            elif key == "feedback_interval":
+                valid = isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 20
+            elif key == "focused_transparency":
+                valid = isinstance(value, (int, float)) and not isinstance(value, bool) and 0.5 <= value <= 1.0
+            elif key == "font_size_scale":
+                valid = isinstance(value, (int, float)) and not isinstance(value, bool) and 0.8 <= value <= 1.5
+            elif key == "theme_mode":
+                valid = value in {"dark", "light"}
+            else:
+                valid = isinstance(value, bool)
+            if not valid:
+                if strict:
+                    raise ValueError(f"Invalid preference: {key}")
+                continue
+            preferences[key] = value
+        return preferences
+
+    def get_preferences(self) -> dict:
+        return dict(self.config.get("preferences", self.DEFAULT_PREFERENCES))
+
+    def update_preferences(self, updates: dict) -> dict:
+        if not isinstance(updates, dict):
+            raise ValueError("preferences update must be an object")
+        current = self.get_preferences()
+        current.update(updates)
+        preferences = self._normalize_preferences(current, strict=True)
+        self.config["preferences"] = preferences
+        self.save_config(self.config)
+        return dict(preferences)
 
     def get_interruption_reasons(self):
         """Returns the hierarchical dictionary of interruption reasons."""
