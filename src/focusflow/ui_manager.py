@@ -501,20 +501,22 @@ class UIManager:
                     font=("Segoe UI", 26, "bold")).grid(row=0, column=0, columnspan=3, pady=PADDING_LARGE)
         
         # Theme Toggle Button (Placed relatively to not mess up grid)
-        self.theme_btn = ctk.CTkButton(self.setup_view_frame, text="🌗", 
+        self.top_actions = ctk.CTkFrame(self.setup_view_frame, fg_color="transparent")
+        self.top_actions.place(relx=1.0, rely=0.0, anchor="ne", x=-8, y=4)
+        self.theme_btn = ctk.CTkButton(self.top_actions, text="🌗",
                                       width=30, height=30,
                                       fg_color="transparent", 
                                       hover_color=BUTTON_HOVER,
                                       font=(FONT_NAME, 16),
                                       command=self._on_theme_toggle)
-        self.theme_btn.place(relx=0.9, rely=0.0) # Top-right corner of the frame
-        self.settings_btn = ctk.CTkButton(self.setup_view_frame, text="⚙",
+        self.theme_btn.pack(side="left")
+        self.settings_btn = ctk.CTkButton(self.top_actions, text="⚙",
                                           width=30, height=30,
                                           fg_color="transparent",
                                           hover_color=BUTTON_HOVER,
                                           font=(FONT_NAME, 16),
                                           command=self.settings_callback)
-        self.settings_btn.place(relx=0.95, rely=0.0)
+        self.settings_btn.pack(side="left", padx=(4, 0))
         
         # Project/Task Input Card
         self.input_card, input_inner = self._create_card_frame(self.setup_view_frame)

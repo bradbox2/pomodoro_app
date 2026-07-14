@@ -27,10 +27,17 @@ class InterruptionWindow(Toplevel):
                  font=('Helvetica', 10, 'bold')).pack(pady=(0, 10))
 
         reasons = AppConfigManager().get_interruption_reasons()
-        
+
+        if not reasons:
+            ttk.Label(main_frame, text="暂无可用的中断原因。请在设置中添加。").pack(pady=10)
+
         for category, reason_list in reasons.items():
             cat_frame = ttk.LabelFrame(main_frame, text=category, padding="10")
             cat_frame.pack(fill="x", pady=5)
+
+            if not reason_list:
+                ttk.Label(cat_frame, text="此分类暂无中断原因。").pack(fill="x", pady=2)
+                continue
             
             # Display buttons vertically for better visibility
             for reason_data in reason_list:
