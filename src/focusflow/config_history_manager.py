@@ -137,7 +137,10 @@ class ConfigHistoryManager:
                 # Check 1: Location Changed?
                 # User Rule: "Location changes (storage path or identifier position)... stop comparison"
                 # We define "Location" as (Category, Index).
-                location_changed = (old_cat != category) or (old_idx != index)
+                # Category labels are user-editable presentation groups. A category
+                # rename must not sever the stable reason-id alias chain; only an
+                # actual list position change starts a new location series.
+                location_changed = old_idx != index
                 
                 if location_changed:
                     # STOP Comparison -> Clear history for this ID? 

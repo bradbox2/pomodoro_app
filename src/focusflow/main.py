@@ -356,8 +356,12 @@ class PomodoroApp:
         dialog.minsize(560, 580)
         dialog.transient(self.root)
 
-        body = ctk.CTkScrollableFrame(dialog, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=18, pady=(18, 8))
+        tabs = ctk.CTkTabview(dialog)
+        tabs.pack(fill="both", expand=True, padx=18, pady=(18, 8))
+        general_tab = tabs.add("常规")
+        interruption_tab = tabs.add("中断选项")
+        body = ctk.CTkScrollableFrame(general_tab, fg_color="transparent")
+        body.pack(fill="both", expand=True, padx=2, pady=2)
         preferences = self.preferences
         fields = {}
 
@@ -415,6 +419,148 @@ class PomodoroApp:
         ctk.CTkLabel(scale_line, text="字体缩放").pack(side="left", fill="x", expand=True)
         ctk.CTkOptionMenu(scale_line, variable=scale_var,
                           values=[f"{value}%" for value in range(80, 151, 10)], width=100).pack(side="right")
+
+        ctk.CTkLabel(interruption_tab, text="管理中断分类和原因；这里的操作会立即保存。",
+                     anchor="w").pack(fill="x", padx=12, pady=(10, 8))
+        interruption_body = ctk.CTkFrame(interruption_tab, fg_color="transparent")
+        interruption_body.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        interruption_body.grid_columnconfigure(0, weight=1)
+        interruption_body.grid_columnconfigure(1, weight=2)
+        interruption_body.grid_rowconfigure(1, weight=1)
+        ctk.CTkLabel(interruption_body, text="分类", font=(FONT_NAME, 14, "bold")).grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        ctk.CTkLabel(interruption_body, text="原因", font=(FONT_NAME, 14, "bold")).grid(row=0, column=1, sticky="w", padx=6, pady=4)
+        category_list = ctk.CTkScrollableFrame(interruption_body, height=300)
+        category_list.grid(row=1, column=0, sticky="nsew", padx=(0, 6))
+        reason_list = ctk.CTkScrollableFrame(interruption_body, height=300)
+        reason_list.grid(row=1, column=1, sticky="nsew", padx=(6, 0))
+        category_actions = ctk.CTkFrame(interruption_body, fg_color="transparent")
+        category_actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        reason_actions = ctk.CTkFrame(interruption_body, fg_color="transparent")
+        reason_actions.grid(row=2, column=1, sticky="ew", pady=(8, 0))
+        selected_category = {"name": None}
+
+        def set_interruption_status(message: str):
+            status.configure(text=message)
+
+        def refresh_reasons():
+            for widget in reason_list.winfo_children():
+                widget.destroy()
+            category = selected_category["name"]
+            reasons = self.config_manager.get_interruption_reasons().get(category, []) if category else []
+            if not reasons:
+                ctk.CTkLabel(reason_list, text="此分类暂无中断原因。\n可以点击“新增原因”。").pack(pady=20)
+                return
+            for reason in reasons:
+                row = ctk.CTkFrame(reason_list, fg_color="transparent")
+                row.pack(fill="x", pady=2)
+                ctk.CTkLabel(row, text=reason.get("name", ""), anchor="w").pack(side="left", fill="x", expand=True, padx=4)
+                ctk.CTkButton(row, text="改名", width=48,
+                              command=lambda item=reason: rename_reason(item)).pack(side="right", padx=2)
+                ctk.CTkButton(row, text="删", width=36,
+                              command=lambda item=reason: delete_reason(item)).pack(side="right", padx=2)
+
+        def select_category(category: str):
+            selected_category["name"] = category
+            refresh_categories()
+            refresh_reasons()
+
+        def refresh_categories(select: str | None = None):
+            categories = list(self.config_manager.get_interruption_reasons())
+            if select in categories:
+                selected_category["name"] = select
+            elif selected_category["name"] not in categories:
+                selected_category["name"] = categories[0] if categories else None
+            for widget in category_list.winfo_children():
+                widget.destroy()
+            if not categories:
+                ctk.CTkLabel(category_list, text="暂无分类。\n可以点击“新增分类”。").pack(pady=20)
+            for category in categories:
+                ctk.CTkButton(category_list, text=category, anchor="w",
+                              fg_color=BUTTON_COLOR if category == selected_category["name"] else "transparent",
+                              command=lambda value=category: select_category(value)).pack(fill="x", pady=2)
+
+        def add_category():
+            name = simpledialog.askstring("新增分类", "分类名称：", parent=dialog)
+            if name is None:
+                return
+            try:
+                self.config_manager.add_interruption_category(name)
+                refresh_categories(name.strip())
+                refresh_reasons()
+            except ValueError as error:
+                set_interruption_status(f"操作失败：{error}")
+
+        def rename_category():
+            old_name = selected_category["name"]
+            if not old_name:
+                set_interruption_status("请先选择一个分类。")
+                return
+            name = simpledialog.askstring("重命名分类", "新的分类名称：", initialvalue=old_name, parent=dialog)
+            if name is None:
+                return
+            try:
+                new_name = self.config_manager.rename_interruption_category(old_name, name)
+                refresh_categories(new_name)
+                refresh_reasons()
+            except ValueError as error:
+                set_interruption_status(f"操作失败：{error}")
+
+        def delete_category():
+            category = selected_category["name"]
+            if not category:
+                set_interruption_status("请先选择一个分类。")
+                return
+            if not messagebox.askyesno("删除分类", f"删除分类“{category}”及其中的原因？\n历史记录不会受到影响。", parent=dialog):
+                return
+            try:
+                self.config_manager.delete_interruption_category(category)
+                selected_category["name"] = None
+                refresh_categories()
+                refresh_reasons()
+            except ValueError as error:
+                set_interruption_status(f"操作失败：{error}")
+
+        def add_reason():
+            category = selected_category["name"]
+            if not category:
+                set_interruption_status("请先选择一个分类。")
+                return
+            name = simpledialog.askstring("新增中断原因", "原因名称：", parent=dialog)
+            if name is None:
+                return
+            try:
+                self.config_manager.add_interruption_reason(category, name)
+                refresh_reasons()
+            except ValueError as error:
+                set_interruption_status(f"操作失败：{error}")
+
+        def rename_reason(reason):
+            category = selected_category["name"]
+            name = simpledialog.askstring("重命名中断原因", "新的原因名称：", initialvalue=reason.get("name", ""), parent=dialog)
+            if name is None:
+                return
+            try:
+                self.config_manager.rename_interruption_reason(category, reason["id"], name)
+                refresh_reasons()
+            except ValueError as error:
+                set_interruption_status(f"操作失败：{error}")
+
+        def delete_reason(reason):
+            category = selected_category["name"]
+            if not messagebox.askyesno("删除中断原因", f"删除“{reason.get('name', '')}”？\n历史记录不会受到影响。", parent=dialog):
+                return
+            try:
+                self.config_manager.delete_interruption_reason(category, reason["id"])
+                refresh_reasons()
+            except ValueError as error:
+                set_interruption_status(f"操作失败：{error}")
+
+        ctk.CTkButton(category_actions, text="新增分类", command=add_category).pack(side="left", padx=2)
+        ctk.CTkButton(category_actions, text="重命名", command=rename_category).pack(side="left", padx=2)
+        ctk.CTkButton(category_actions, text="删除", command=delete_category).pack(side="left", padx=2)
+        ctk.CTkButton(reason_actions, text="新增原因", command=add_reason).pack(side="left", padx=2)
+        refresh_categories()
+        refresh_reasons()
 
         status = ctk.CTkLabel(dialog, text="", text_color=ThemeManager.get_color("danger"), anchor="w")
         status.pack(fill="x", padx=18, pady=(0, 4))

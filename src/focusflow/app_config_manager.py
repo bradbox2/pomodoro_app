@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import uuid
+from copy import deepcopy
 from pathlib import Path
 
 from focusflow.app_paths import AppPaths
@@ -74,7 +76,7 @@ class AppConfigManager:
     def load_config(self):
         """Loads configuration from JSON file. Creates default if missing."""
         if not os.path.exists(self.config_path):
-            config = dict(self.DEFAULT_CONFIG)
+            config = deepcopy(self.DEFAULT_CONFIG)
             config["preferences"] = dict(self.DEFAULT_PREFERENCES)
             self.save_config(config)
             return config
@@ -97,7 +99,7 @@ class AppConfigManager:
             return data
         except (json.JSONDecodeError, IOError, ValueError) as e:
             print(f"Error loading config: {e}. Using default.")
-            fallback = dict(self.DEFAULT_CONFIG)
+            fallback = deepcopy(self.DEFAULT_CONFIG)
             fallback["preferences"] = dict(self.DEFAULT_PREFERENCES)
             self.save_config(fallback)
             return fallback
@@ -210,7 +212,89 @@ class AppConfigManager:
 
     def get_interruption_reasons(self):
         """Returns the hierarchical dictionary of interruption reasons."""
-        return self.config.get("interruptions", self.DEFAULT_CONFIG["interruptions"])
+        return deepcopy(self.config.get("interruptions", self.DEFAULT_CONFIG["interruptions"]))
+
+    @staticmethod
+    def _require_name(name: str, label: str) -> str:
+        cleaned = str(name or "").strip()
+        if not cleaned:
+            raise ValueError(f"{label} cannot be empty")
+        return cleaned
+
+    def _save_interruption_changes(self) -> None:
+        self.save_config(self.config)
+        self.history_manager.update_history(self.config)
+
+    def add_interruption_category(self, category_name: str) -> str:
+        category_name = self._require_name(category_name, "Category name")
+        interruptions = self.config.setdefault("interruptions", {})
+        if category_name in interruptions:
+            raise ValueError("Category already exists")
+        interruptions[category_name] = []
+        self._save_interruption_changes()
+        return category_name
+
+    def rename_interruption_category(self, old_name: str, new_name: str) -> str:
+        new_name = self._require_name(new_name, "Category name")
+        interruptions = self.config.setdefault("interruptions", {})
+        if old_name not in interruptions:
+            raise ValueError("Category not found")
+        if new_name != old_name and new_name in interruptions:
+            raise ValueError("Category already exists")
+        items = interruptions.pop(old_name)
+        interruptions[new_name] = items
+        self._save_interruption_changes()
+        return new_name
+
+    def delete_interruption_category(self, category_name: str) -> None:
+        interruptions = self.config.setdefault("interruptions", {})
+        if category_name not in interruptions:
+            raise ValueError("Category not found")
+        del interruptions[category_name]
+        self._save_interruption_changes()
+
+    def add_interruption_reason(self, category_name: str, reason_name: str) -> dict:
+        reason_name = self._require_name(reason_name, "Interruption reason")
+        interruptions = self.config.setdefault("interruptions", {})
+        if category_name not in interruptions:
+            raise ValueError("Category not found")
+        reasons = interruptions[category_name]
+        if any(str(item.get("name", "")).strip() == reason_name for item in reasons if isinstance(item, dict)):
+            raise ValueError("Interruption reason already exists")
+        reason = {"name": reason_name, "id": str(uuid.uuid4())}
+        reasons.append(reason)
+        self._save_interruption_changes()
+        return dict(reason)
+
+    def rename_interruption_reason(self, category_name: str, reason_id: str, new_name: str) -> dict:
+        new_name = self._require_name(new_name, "Interruption reason")
+        interruptions = self.config.setdefault("interruptions", {})
+        if category_name not in interruptions:
+            raise ValueError("Category not found")
+        reasons = interruptions[category_name]
+        if any(
+            str(item.get("name", "")).strip() == new_name and item.get("id") != reason_id
+            for item in reasons if isinstance(item, dict)
+        ):
+            raise ValueError("Interruption reason already exists")
+        for item in reasons:
+            if isinstance(item, dict) and item.get("id") == reason_id:
+                item["name"] = new_name
+                self._save_interruption_changes()
+                return dict(item)
+        raise ValueError("Interruption reason not found")
+
+    def delete_interruption_reason(self, category_name: str, reason_id: str) -> None:
+        interruptions = self.config.setdefault("interruptions", {})
+        if category_name not in interruptions:
+            raise ValueError("Category not found")
+        reasons = interruptions[category_name]
+        for index, item in enumerate(reasons):
+            if isinstance(item, dict) and item.get("id") == reason_id:
+                del reasons[index]
+                self._save_interruption_changes()
+                return
+        raise ValueError("Interruption reason not found")
 
     def get_feedback_moods(self):
         """Returns the list of mood options."""
