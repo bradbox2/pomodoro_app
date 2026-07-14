@@ -3,6 +3,7 @@ from pathlib import Path
 from focusflow.app_paths import AppPaths
 from focusflow.app_config_manager import AppConfigManager
 from focusflow.analysis_manager import AnalysisManager
+from focusflow.main import get_base_path
 
 
 def test_environment_data_root_overrides_default(monkeypatch, tmp_path):
@@ -48,3 +49,10 @@ def test_configuration_and_exports_use_the_resolved_user_data_directory(tmp_path
     assert Path(config_manager.config_path) == paths.config_path
     assert Path(config_manager.history_manager.history_path).parent == paths.data_dir
     assert Path(analysis_manager.report_path).parent == paths.exports_dir
+
+
+def test_frozen_runtime_uses_pyinstaller_resource_root(monkeypatch, tmp_path):
+    monkeypatch.setattr("focusflow.main.sys.frozen", True, raising=False)
+    monkeypatch.setattr("focusflow.main.sys._MEIPASS", str(tmp_path / "_internal"), raising=False)
+
+    assert get_base_path() == str(tmp_path / "_internal")

@@ -37,10 +37,10 @@ def get_base_path():
 
     Works both from a source checkout (this module lives at
     <root>/src/focusflow/main.py, so the root is two parents up) and from a
-    PyInstaller one-folder build (assets sit next to the executable).
+    PyInstaller one-folder build (assets live under the resource root).
     """
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
+        return getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
     return str(Path(__file__).resolve().parents[2])
 
 class PomodoroApp:
